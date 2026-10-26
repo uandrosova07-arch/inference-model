@@ -1,0 +1,12 @@
+cutoffs: [10, 100, 1000]
+mrr_cutoff: 10
+ndcg_cutoff: 10
+map_cutoff: 1000
+precision_cutoff: 10
+recall_cutoff: 1000
+save_per_query: true
+# Restrict qrels to the configured topic file/builtin topic set. This is
+# essential for the 6,980-query MS MARCO dev subset because Pyserini's qrels
+# resource also contains judgments for the larger dev collection.
+query_scope: configured_queries
+

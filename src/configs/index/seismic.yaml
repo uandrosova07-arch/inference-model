@@ -1,0 +1,25 @@
+variant: standard  # standard or large_vocab
+n_postings: 3000
+centroid_fraction: 0.2
+min_cluster_size: 2
+summary_energy: 0.5
+max_fraction: 6.0
+doc_cut: 15
+nknn: 0
+knn_path: null
+batched_indexing: null
+load_content: false
+threads: 0
+expected_documents: ${dataset.expected_documents}
+
+search:
+  top_k: 1000
+  query_cut: 10
+  heap_factor: 0.8
+  n_knn: 0
+  first_sorted: false
+  batch_size: 64
+  warmup_queries: 16
+  threads: ${index.threads}
+  run_name: seismic
+

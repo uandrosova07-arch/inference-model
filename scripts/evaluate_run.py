@@ -1,4 +1,4 @@
-"""Compute MS MARCO MRR@10 and macro Recall@1000 from a run file."""
+"""Compute the standard MS MARCO retrieval metric grid from a run file."""
 
 from __future__ import annotations
 
@@ -19,12 +19,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_builtin_qrels(name: str) -> dict[str, set[str]]:
-    from pyserini.search import get_qrels
+    from pyserini.search import get_qrels, get_topics
 
     qrels = get_qrels(name)
+    topic_ids = {str(query_id) for query_id in get_topics(name)}
     return {
         str(query_id): {str(doc_id) for doc_id, relevance in docs.items() if int(relevance) > 0}
         for query_id, docs in qrels.items()
+        if str(query_id) in topic_ids
     }
 
 
@@ -43,24 +45,30 @@ def load_run(path: Path) -> dict[str, list[str]]:
     return {query_id: [doc_id for _, doc_id in sorted(rows)] for query_id, rows in ranking.items()}
 
 
-def evaluate(relevant: dict[str, set[str]], ranking: dict[str, list[str]]) -> dict[str, float | int]:
-    reciprocal_ranks = []
-    recalls = []
-    for query_id, relevant_docs in relevant.items():
-        retrieved = ranking.get(query_id, [])
-        reciprocal_rank = 0.0
-        for rank, doc_id in enumerate(retrieved[:10], 1):
-            if doc_id in relevant_docs:
-                reciprocal_rank = 1.0 / rank
-                break
-        reciprocal_ranks.append(reciprocal_rank)
-        recalls.append(len(relevant_docs.intersection(retrieved[:1000])) / len(relevant_docs))
-    return {
-        "queries": len(relevant),
-        "queries_ranked": len(set(relevant).intersection(ranking)),
-        "mrr_at_10": sum(reciprocal_ranks) / len(reciprocal_ranks),
-        "recall_at_1000": sum(recalls) / len(recalls),
+def evaluate(
+    relevant: dict[str, set[str]], ranking: dict[str, list[str]]
+) -> dict[str, float | int]:
+    # Keep this compatibility function for the older benchmark scripts, but
+    # calculate the same complete metric grid as the unified pipeline.
+    from src.metrics.retrieval import evaluate as evaluate_metrics
+
+    qrels = {
+        query_id: {document_id: 1 for document_id in document_ids}
+        for query_id, document_ids in relevant.items()
     }
+    return evaluate_metrics(
+        qrels,
+        ranking,
+        {
+            "cutoffs": [10, 100, 1000],
+            "mrr_cutoff": 10,
+            "ndcg_cutoff": 10,
+            "map_cutoff": 1000,
+            "precision_cutoff": 10,
+            "recall_cutoff": 1000,
+            "save_per_query": False,
+        },
+    )
 
 
 def main() -> None:

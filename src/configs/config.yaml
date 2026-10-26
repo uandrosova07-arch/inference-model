@@ -1,0 +1,45 @@
+defaults:
+  - dataset: msmarco
+  - model: splade
+  - index: seismic
+  - metrics: retrieval
+  - _self_
+
+experiment:
+  name: baseline
+
+seed: 42
+
+runtime:
+  # Relative paths are resolved from the repository root.
+  output_dir: outputs/${experiment.name}
+  temporary_dir: null
+  log_level: INFO
+
+pipeline:
+  stages: [prepare, encode_documents, encode_queries, build_index, search, metrics]
+  start_at: prepare
+  end_at: metrics
+  resume: true
+  force: []
+
+# These are deliberately public config values. Point any of them at
+# /kaggle/input/... and start from the corresponding later stage.
+paths:
+  document_vectors: ${runtime.output_dir}/vectors/documents
+  query_vectors: ${runtime.output_dir}/vectors/queries.dev.jsonl
+  index_prefix: ${runtime.output_dir}/seismic/msmarco
+  index_file: ${paths.index_prefix}.index.seismic
+  run: ${runtime.output_dir}/seismic/run.dev.trec
+  report: ${runtime.output_dir}/report.json
+  per_query_metrics: ${runtime.output_dir}/metrics/per_query.jsonl
+  state_dir: ${runtime.output_dir}/state
+  resolved_config: ${runtime.output_dir}/config.yaml
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${runtime.output_dir}/hydra
+  output_subdir: null
+

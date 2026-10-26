@@ -1,0 +1,8 @@
+defaults:
+  - config
+  - _self_
+
+runtime:
+  output_dir: /kaggle/working/inference-model/outputs/${experiment.name}
+  temporary_dir: /kaggle/temp
+

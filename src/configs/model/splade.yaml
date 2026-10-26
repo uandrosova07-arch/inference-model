@@ -1,0 +1,15 @@
+name_or_path: naver/splade-cocondenser-selfdistil
+local_path: input/models/splade-cocondenser-selfdistil
+device: auto
+devices: auto
+batch_size: 32
+bucket_multiplier: 32
+shard_size: 10000
+max_length: 256
+precision: auto
+# Raw floating-point SPLADE weights are kept for SEISMIC.
+threshold: 0.0
+max_terms: null
+include_content: false
+trust_remote_code: false
+

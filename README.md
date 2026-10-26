@@ -9,11 +9,192 @@
 - [splade-cocondenser-selfdistil](https://huggingface.co/naver/splade-cocondenser-selfdistil)
 
 **Статьи**
-- [SPLADE v2: Sparse Lexical and Expansion Model for Information Retrieval](https://arxiv.org/abs/2109.10086)
-- [Efficient Inverted Indexes for Approximate Retrieval over Learned Sparse Representations](https://arxiv.org/abs/2404.18812)
-- [Efficient Sketching and Nearest Neighbor Search Algorithms for Sparse Vector Sets](https://arxiv.org/abs/2509.24815)
+- [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/1810.04805)
+- [Efficient Inverted Indexes for Approximate Retrieval over Learned Sparse Representations](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/2404.18812)
+- [Membership Inference Attacks Against Machine Learning Models](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/1610.05820)
+- [SPLADE: Sparse Lexical and Expansion Model for First Stage Ranking](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/2107.05720)
+- [SPLADE v2: Sparse Lexical and Expansion Model for Information Retrieval](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/2109.10086)
+- [Understanding Wacky Weights: A Dissection of SPLADE's Learned Term Importance](https://www.google.com/url?source=gmail&sa=E&q=https://arxiv.org/abs/2401.03366)
 
-## Полный прогон на Kaggle: 2 × T4
+## Единый экспериментальный pipeline
+
+Основной сценарий теперь запускается одной командой и состоит из независимых,
+возобновляемых этапов:
+
+```text
+collection.tsv
+    -> prepare
+    -> encode_documents (SPLADE, 1..N GPU, resumable JSONL shards)
+    -> encode_queries   (SPLADE)
+    -> build_index      (SEISMIC)
+    -> search           (SEISMIC)
+    -> metrics          (quality + speed + artifact sizes)
+```
+
+Структура повторяет подход
+[`Blinorot/pytorch_project_template`](https://github.com/Blinorot/pytorch_project_template):
+код разделён по `datasets`, `model`, `index`, `metrics`, orchestration находится
+в `src/pipeline`, а все параметры эксперимента собраны в Hydra-конфигах.
+
+```text
+.
+├── pipeline.py                 # единая точка входа
+├── src
+│   ├── configs                 # dataset/model/index/metrics + Kaggle/smoke
+│   ├── datasets                # чтение MS MARCO и qrels
+│   ├── model                   # SPLADE и multi-GPU sharding
+│   ├── index                   # build/search SEISMIC
+│   ├── metrics                 # MRR, nDCG, MAP, Recall, Precision, Success
+│   ├── pipeline                # resume, диапазоны этапов, state
+│   └── utils
+├── scripts/run_pipeline.py     # Kaggle bootstrap + запуск
+└── tests
+```
+
+### Полный прогон на Kaggle
+
+После подключения репозитория и датасета достаточно одной команды. Launcher
+доустановит отсутствующие зависимости, но не переустанавливает Kaggle CUDA
+PyTorch:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=splade_seismic_v1 \
+  dataset.documents=/kaggle/input/msmarco/collection.tsv \
+  model.devices=2 \
+  model.batch_size=32 \
+  index.threads=4 \
+  index.search.threads=4
+```
+
+Если модель подключена отдельным Kaggle Dataset:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=splade_seismic_v1 \
+  dataset.documents=/kaggle/input/msmarco/collection.tsv \
+  model.local_path=/kaggle/input/splade-model/splade-cocondenser-selfdistil \
+  model.devices=2
+```
+
+При отключённом Internet зависимости можно положить в wheelhouse-датасет:
+
+```bash
+python scripts/run_pipeline.py \
+  --wheelhouse /kaggle/input/retrieval-wheels \
+  experiment.name=offline_run
+```
+
+Все результаты пишутся в
+`/kaggle/working/inference-model/outputs/<experiment.name>`. Повтор той же
+команды пропускает успешно законченные этапы. Незаконченный SPLADE-этап
+продолжает работу с первого отсутствующего атомарного шарда.
+
+### Запуск с любого этапа
+
+Диапазон задаётся включительно через `pipeline.start_at` и `pipeline.end_at`.
+Допустимые этапы: `prepare`, `encode_documents`, `encode_queries`,
+`build_index`, `search`, `metrics`.
+
+Только получить SPLADE-векторы:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=vectors_v1 \
+  pipeline.end_at=encode_queries
+```
+
+Построить SEISMIC из добавленных готовых векторов (`.jsonl`, каталог шардов
+или `.tar.gz`) и продолжить до метрик:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=from_vectors \
+  pipeline.start_at=build_index \
+  paths.document_vectors=/kaggle/input/splade-vectors/documents \
+  paths.query_vectors=/kaggle/input/splade-vectors/queries.jsonl \
+  dataset.expected_documents=8841823
+```
+
+Начать с готового индекса:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=from_index \
+  pipeline.start_at=search \
+  paths.index_file=/kaggle/input/seismic-index/msmarco.index.seismic \
+  paths.query_vectors=/kaggle/input/splade-vectors/queries.jsonl
+```
+
+Пересчитать только метрики для готового TREC/MS MARCO run:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=metrics_only \
+  pipeline.start_at=metrics \
+  paths.run=/kaggle/input/my-run/run.trec
+```
+
+Для собственного query/qrels TSV вместо ресурсов Pyserini:
+
+```bash
+python scripts/run_pipeline.py \
+  pipeline.start_at=metrics \
+  paths.run=/kaggle/input/my-run/run.trec \
+  dataset.query_source=file \
+  dataset.queries=/kaggle/input/my-data/queries.tsv \
+  dataset.qrels_source=file \
+  dataset.qrels=/kaggle/input/my-data/qrels.tsv
+```
+
+`pipeline.force=[search,metrics]` принудительно повторяет выбранные этапы.
+Для отдельного набора гиперпараметров рекомендуется менять
+`experiment.name`: так результаты разных запусков не смешиваются.
+
+### Метрики и артефакты
+
+`outputs/<experiment>/report.json` объединяет:
+
+- MRR, nDCG, MAP, Recall, Precision и Success на всех cutoffs из конфига;
+- per-stage wall time, docs/s, QPS и batch-amortized p50/p95/p99;
+- размеры SPLADE-векторов, SEISMIC-индекса и run-файла;
+- параметры и пути конкретного запуска.
+
+Per-query значения сохраняются в `metrics/per_query.jsonl`, разрешённый Hydra
+конфиг — в `config.yaml`, а состояние каждого этапа — в `state/`. Параметры
+SEISMIC меняются обычными overrides, например:
+
+```bash
+python scripts/run_pipeline.py \
+  experiment.name=seismic_sweep_01 \
+  pipeline.start_at=build_index \
+  paths.document_vectors=/kaggle/input/splade-vectors/documents.jsonl \
+  paths.query_vectors=/kaggle/input/splade-vectors/queries.jsonl \
+  index.n_postings=4000 \
+  index.centroid_fraction=0.1 \
+  index.search.query_cut=8 \
+  index.search.heap_factor=0.7
+```
+
+Для словаря больше 65 535 компонент используйте
+`index.variant=large_vocab`. Обычный BERT/SPLADE vocab помещается в
+`index.variant=standard`.
+
+Локальная быстрая проверка (1 000 документов / 100 запросов):
+
+```bash
+pip install -r requirements.txt
+python pipeline.py --config-name=smoke
+pytest -q
+```
+
+## Совместимые специализированные сценарии
+
+Старые entrypoints оставлены для воспроизводимости уже начатых запусков и
+Lucene-сравнения. Новый экспериментальный код лучше запускать через
+`scripts/run_pipeline.py`.
+
+### Полный прогон на Kaggle: 2 × T4
 
 Настройки Kaggle:
 
