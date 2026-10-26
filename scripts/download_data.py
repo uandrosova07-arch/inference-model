@@ -20,6 +20,7 @@ def extract(archive):
     print(f"Extracting {archive.name}...", flush=True)
     with tarfile.open(archive, "r:gz") as tar:
         tar.extractall(DATA_DIR, filter="data")
+    archive.unlink()
 
 def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
