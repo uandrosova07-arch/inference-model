@@ -1,4 +1,4 @@
-# Sparse Retrieval
+# Sparse Retrieval Inference Boost
 
 Улучшение инференса моделей разреженного поиска / улучшение процесса обучения моделей семейства SPLADE
 
@@ -61,3 +61,30 @@ Pipeline выполняет:
 - `outputs/baseline/encoding_summary.json` — общая скорость двух GPU и padding;
 - `outputs/baseline/pipeline_metrics.json` — время и размер артефактов;
 - `outputs/baseline/retrieval_metrics.json` — MRR@10 и Recall@1000.
+
+## SEISMIC поверх сохранённых SPLADE-векторов
+
+SEISMIC строится отдельным CPU-этапом, поэтому повторно кодировать коллекцию на
+GPU не требуется. Скрипт потоково объединяет JSONL-шарды во временный файл в
+`/kaggle/temp`, проверяет полноту коллекции, строит индекс, удаляет временный
+файл и измеряет MRR@10, Recall@1000 и скорость поиска.
+
+```bash
+PYTHONPATH=. python scripts/run_seismic_pipeline.py \
+  --vectors-dir /kaggle/working/inference-model/outputs/baseline/vectors/world-size-2 \
+  --queries /kaggle/working/inference-model/outputs/baseline/queries.dev.splade.tsv \
+  --output-dir /kaggle/working/inference-model/outputs/baseline \
+  --threads 4
+```
+
+Параметры по умолчанию соответствуют высокоточному примеру авторов SEISMIC
+для MS MARCO SPLADE Co-Condenser: `n_postings=3000`,
+`centroid_fraction=0.2`, `summary_energy=0.5`, `max_fraction=6`, а для поиска —
+`query_cut=10`, `heap_factor=0.8`, `first_sorted=false`.
+
+Артефакты:
+
+- `outputs/baseline/seismic/msmarco.index.seismic` — сериализованный индекс;
+- `outputs/baseline/seismic/run.dev.tsv` — top-1000 выдача;
+- `outputs/baseline/seismic/retrieval_metrics.json` — MRR@10 и Recall@1000;
+- `outputs/baseline/seismic/pipeline_metrics.json` — время, QPS и размеры.

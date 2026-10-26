@@ -3,3 +3,4 @@ huggingface_hub
 tqdm
 sentence-transformers
 pyserini==2.4.0
+pyseismic-lsr==0.5.4
