@@ -1,0 +1,5 @@
+torch
+huggingface_hub
+tqdm
+sentence-transformers
+pyserini==2.4.0

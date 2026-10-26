@@ -1,3 +1,10 @@
 .DS_Store
+
 .venv/
-data/
+
+input/
+outputs/
+
+.env
+
+__pycache__/
