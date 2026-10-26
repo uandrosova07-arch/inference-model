@@ -55,8 +55,12 @@ collection.tsv
 
 Настройки notebook: `Accelerator = GPU T4 x2`, `Internet = On`, подключённый
 датасет [`iskulovdamir/msmarco`](https://www.kaggle.com/datasets/iskulovdamir/msmarco).
-Конфиг Kaggle уже указывает на `/kaggle/input/msmarco/collection.tsv`, включает
-gzip для SPLADE-шардов и сохраняет результаты в `/kaggle/working`.
+Launcher автоматически находит `collection.tsv` в подключённых Kaggle Dataset,
+включая вложенный путь вида
+`/kaggle/input/datasets/iskulovdamir/msmarco/collection.tsv`. Конфиг включает
+gzip для SPLADE-шардов и сохраняет результаты в `/kaggle/working`. Если
+подключено несколько коллекций, путь можно задать явно через
+`dataset.documents=/path/to/collection.tsv`.
 
 Полный notebook-блок с клонированием:
 
@@ -207,7 +211,7 @@ Lucene-сравнения. Новый экспериментальный код 
 
 - Accelerator: `GPU T4 x2`;
 - подключённый датасет: `iskulovdamir/msmarco`;
-- путь к данным: `/kaggle/input/msmarco`;
+- путь к данным определяется автоматически по `collection.tsv`;
 - Internet нужен для `git clone`, установки Pyserini и однократной загрузки модели.
 
 Артефакты создаются в `/kaggle/working`; после завершения нужно сохранить

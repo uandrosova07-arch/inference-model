@@ -8,7 +8,10 @@ runtime:
   require_cuda: true
 
 dataset:
-  documents: /kaggle/input/msmarco/collection.tsv
+  # Kaggle can mount a dataset either directly below /kaggle/input or below
+  # an owner/dataset hierarchy. scripts/run_pipeline.py discovers the actual
+  # collection and exports this variable before Hydra resolves the config.
+  documents: ${oc.env:MSMARCO_COLLECTION,/kaggle/input/msmarco/collection.tsv}
 
 model:
   compress_vectors: true

@@ -10,9 +10,12 @@ import argparse
 import os
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+KAGGLE_INPUT_DIR = Path("/kaggle/input")
+MSMARCO_COMPANION_FILES = ("queries.dev.tsv", "qrels.dev.tsv")
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -40,10 +43,66 @@ def ensure_requirements(skip: bool, wheelhouse: Path | None) -> None:
     subprocess.check_call(command)
 
 
+def has_documents_override(overrides: Sequence[str]) -> bool:
+    """Return whether Hydra arguments already specify the collection path."""
+    return any(
+        override.lstrip("+").partition("=")[0] == "dataset.documents" for override in overrides
+    )
+
+
+def discover_msmarco_collection(
+    input_dir: Path = KAGGLE_INPUT_DIR,
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Find an unambiguous MS MARCO collection in Kaggle's mounted datasets."""
+    environment = os.environ if environment is None else environment
+    configured = environment.get("MSMARCO_COLLECTION")
+    if configured:
+        collection = Path(configured)
+        if not collection.is_file():
+            raise FileNotFoundError(f"MSMARCO_COLLECTION points to a missing file: {collection}")
+        return collection.resolve()
+
+    conventional = input_dir / "msmarco" / "collection.tsv"
+    if conventional.is_file():
+        return conventional.resolve()
+
+    if not input_dir.is_dir():
+        raise FileNotFoundError(
+            f"Kaggle input directory does not exist: {input_dir}. "
+            "Attach the MS MARCO dataset or pass dataset.documents=/path/to/collection.tsv."
+        )
+
+    candidates = sorted(path for path in input_dir.rglob("collection.tsv") if path.is_file())
+    complete_candidates = [
+        path
+        for path in candidates
+        if all((path.parent / name).is_file() for name in MSMARCO_COMPANION_FILES)
+    ]
+    choices = complete_candidates or candidates
+    if len(choices) == 1:
+        return choices[0].resolve()
+    if not choices:
+        raise FileNotFoundError(
+            f"No collection.tsv found below {input_dir}. "
+            "Attach the MS MARCO dataset or pass dataset.documents=/path/to/collection.tsv."
+        )
+
+    formatted = "\n".join(f"  - {path}" for path in choices)
+    raise RuntimeError(
+        "Multiple possible MS MARCO collections found. Pass an explicit Hydra override "
+        f"dataset.documents=/path/to/collection.tsv:\n{formatted}"
+    )
+
+
 def main() -> None:
     args, overrides = parse_args()
-    ensure_requirements(args.skip_install, args.wheelhouse)
     environment = os.environ.copy()
+    if Path(args.config_name).stem == "kaggle" and not has_documents_override(overrides):
+        collection = discover_msmarco_collection(environment=environment)
+        environment["MSMARCO_COLLECTION"] = str(collection)
+        print(f"MS MARCO collection: {collection}", flush=True)
+    ensure_requirements(args.skip_install, args.wheelhouse)
     environment.setdefault("PYTHONPATH", str(PROJECT_DIR))
     environment.setdefault("PYTHONUNBUFFERED", "1")
     environment.setdefault("TOKENIZERS_PARALLELISM", "false")
