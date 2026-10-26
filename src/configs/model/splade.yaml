@@ -11,5 +11,9 @@ precision: auto
 threshold: 0.0
 max_terms: null
 include_content: false
+weight_decimals: 6
+compress_vectors: false
+gzip_level: 1
+overwrite: false
 trust_remote_code: false
 

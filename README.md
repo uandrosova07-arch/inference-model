@@ -53,28 +53,32 @@ collection.tsv
 
 ### Полный прогон на Kaggle
 
-После подключения репозитория и датасета достаточно одной команды. Launcher
-доустановит отсутствующие зависимости, но не переустанавливает Kaggle CUDA
-PyTorch:
+Настройки notebook: `Accelerator = GPU T4 x2`, `Internet = On`, подключённый
+датасет [`iskulovdamir/msmarco`](https://www.kaggle.com/datasets/iskulovdamir/msmarco).
+Конфиг Kaggle уже указывает на `/kaggle/input/msmarco/collection.tsv`, включает
+gzip для SPLADE-шардов и сохраняет результаты в `/kaggle/working`.
+
+Полный notebook-блок с клонированием:
 
 ```bash
-python scripts/run_pipeline.py \
-  experiment.name=splade_seismic_v1 \
-  dataset.documents=/kaggle/input/msmarco/collection.tsv \
-  model.devices=2 \
-  model.batch_size=32 \
-  index.threads=4 \
-  index.search.threads=4
+!git clone --depth 1 --branch damir_branch https://github.com/uandrosova07-arch/inference-model.git
+%cd /kaggle/working/inference-model
+!python scripts/run_pipeline.py experiment.name=msmarco_splade_seismic
 ```
 
-Если модель подключена отдельным Kaggle Dataset:
+Если репозиторий уже находится в текущей папке, нужна только последняя строка.
+Launcher проверяет закреплённые зависимости, модель загружается один раз с
+Hugging Face, а число GPU определяется автоматически. Повтор той же команды в
+том же session пропускает завершённые этапы и продолжает недописанные
+атомарные шарды.
+
+Если модель подключена отдельным Kaggle Dataset и Internet нужен только для
+установки пакетов:
 
 ```bash
 python scripts/run_pipeline.py \
-  experiment.name=splade_seismic_v1 \
-  dataset.documents=/kaggle/input/msmarco/collection.tsv \
-  model.local_path=/kaggle/input/splade-model/splade-cocondenser-selfdistil \
-  model.devices=2
+  experiment.name=msmarco_splade_seismic \
+  model.local_path=/kaggle/input/splade-model/splade-cocondenser-selfdistil
 ```
 
 При отключённом Internet зависимости можно положить в wheelhouse-датасет:
@@ -86,9 +90,10 @@ python scripts/run_pipeline.py \
 ```
 
 Все результаты пишутся в
-`/kaggle/working/inference-model/outputs/<experiment.name>`. Повтор той же
-команды пропускает успешно законченные этапы. Незаконченный SPLADE-этап
-продолжает работу с первого отсутствующего атомарного шарда.
+`/kaggle/working/inference-model/outputs/<experiment.name>`. После полного
+запуска сохраните notebook version с output, иначе новый Kaggle session не
+увидит `/kaggle/working`. SEISMIC получает gzip-шарды потоково через FIFO в два
+прохода: дополнительная полноразмерная копия векторов на диске не создаётся.
 
 ### Запуск с любого этапа
 
@@ -158,11 +163,13 @@ python scripts/run_pipeline.py \
 - MRR, nDCG, MAP, Recall, Precision и Success на всех cutoffs из конфига;
 - per-stage wall time, docs/s, QPS и batch-amortized p50/p95/p99;
 - размеры SPLADE-векторов, SEISMIC-индекса и run-файла;
-- параметры и пути конкретного запуска.
+- параметры, environment/package/GPU snapshot и пути конкретного запуска.
 
 Per-query значения сохраняются в `metrics/per_query.jsonl`, разрешённый Hydra
-конфиг — в `config.yaml`, а состояние каждого этапа — в `state/`. Параметры
-SEISMIC меняются обычными overrides, например:
+конфиг — в `config.yaml`, состояние каждого этапа — в `state/`, основной лог —
+в `logs/pipeline.log`, а GPU worker logs — в `logs/encode.rank-XX.log`.
+Одновременно те же сообщения видны в notebook output. Параметры SEISMIC
+меняются обычными overrides, например:
 
 ```bash
 python scripts/run_pipeline.py \

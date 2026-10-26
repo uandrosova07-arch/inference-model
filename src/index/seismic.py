@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 from src.utils.io import directory_size, jsonl_lines, seismic_document_input
 
 INDEX_SUFFIX = ".index.seismic"
+LOGGER = logging.getLogger(__name__)
 
 
 def _index_class(variant: str):
@@ -44,8 +46,18 @@ def build_index(
     index_type = _index_class(str(config["variant"]))
     prefix = normalized_prefix(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
+    LOGGER.info(
+        "Building SEISMIC index from %s (variant=%s, shard_input_mode=%s)",
+        documents,
+        config["variant"],
+        config.get("shard_input_mode", "fifo"),
+    )
     started = time.perf_counter()
-    with seismic_document_input(documents, temporary_dir) as input_path:
+    with seismic_document_input(
+        documents,
+        temporary_dir,
+        shard_input_mode=str(config.get("shard_input_mode", "fifo")),
+    ) as input_path:
         index = index_type.build(
             str(input_path),
             n_postings=int(config["n_postings"]),
@@ -68,7 +80,7 @@ def build_index(
         index.save(str(prefix))
     seconds = time.perf_counter() - started
     output_path = index_file(prefix)
-    return {
+    metrics = {
         "seconds": seconds,
         "documents": int(index.len),
         "dimensions": int(index.dim),
@@ -78,6 +90,14 @@ def build_index(
         "index_file": str(output_path),
         "source_vector_bytes": directory_size(documents),
     }
+    LOGGER.info(
+        "SEISMIC index complete: documents=%s, dimensions=%s, bytes=%s, seconds=%.2f",
+        metrics["documents"],
+        metrics["dimensions"],
+        metrics["index_bytes"],
+        seconds,
+    )
+    return metrics
 
 
 def _chunks(items: list[Any], size: int):
@@ -149,6 +169,7 @@ def search_index(
     from seismic import get_seismic_string
 
     index_type = _index_class(index_variant)
+    LOGGER.info("Loading SEISMIC index: %s", index_path)
     load_started = time.perf_counter()
     index = index_type.load(str(index_path))
     load_seconds = time.perf_counter() - load_started
@@ -182,12 +203,12 @@ def search_index(
                     )
                     result_count += 1
             completed = min(batch_number * batch_size, len(prepared))
-            print(f"SEISMIC searched {completed}/{len(prepared)} queries", flush=True)
+            LOGGER.info("SEISMIC searched %s/%s queries", completed, len(prepared))
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(run_path)
     seconds = time.perf_counter() - started
-    return {
+    metrics = {
         "queries": len(prepared),
         "results": result_count,
         "index_load_seconds": load_seconds,
@@ -200,3 +221,10 @@ def search_index(
         "batch_amortized_query_ms_p99": _percentile(batch_ms_per_query, 0.99),
         "run_bytes": run_path.stat().st_size,
     }
+    LOGGER.info(
+        "SEISMIC search complete: queries=%s, qps=%.2f, seconds=%.2f",
+        metrics["queries"],
+        metrics["queries_per_second"],
+        metrics["search_seconds"],
+    )
+    return metrics

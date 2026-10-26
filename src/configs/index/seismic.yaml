@@ -11,6 +11,7 @@ batched_indexing: null
 load_content: false
 threads: 0
 expected_documents: ${dataset.expected_documents}
+shard_input_mode: fifo
 
 search:
   top_k: 1000

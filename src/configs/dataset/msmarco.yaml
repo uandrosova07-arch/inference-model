@@ -13,4 +13,5 @@ pyserini_qrels: msmarco-passage-dev-subset
 expected_documents: 8841823
 max_documents: null
 max_queries: null
+validate_document_count: true
 

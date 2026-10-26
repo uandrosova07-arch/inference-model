@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
+import multiprocessing
 import os
 import shutil
 import tarfile
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -36,9 +39,13 @@ def directory_size(path: Path) -> int:
 
 def count_lines(path: Path) -> int:
     lines = 0
+    last_byte = b""
     with path.open("rb") as source:
         while block := source.read(16 * 1024 * 1024):
             lines += block.count(b"\n")
+            last_byte = block[-1:]
+    if last_byte and last_byte != b"\n":
+        lines += 1
     return lines
 
 
@@ -46,7 +53,11 @@ def vector_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
     files = sorted(
-        item for item in path.glob("*.jsonl") if item.is_file() and not item.name.endswith(".tmp")
+        item
+        for item in path.iterdir()
+        if item.is_file()
+        and (item.name.endswith(".jsonl") or item.name.endswith(".jsonl.gz"))
+        and not item.name.endswith(".tmp")
     )
     if not files:
         raise FileNotFoundError(f"No JSONL vector shards in {path}")
@@ -69,6 +80,9 @@ def jsonl_lines(path: Path) -> Iterator[str]:
     if path.is_dir():
         for shard in vector_files(path):
             yield from jsonl_lines(shard)
+    elif path.name.endswith(".jsonl.gz"):
+        with gzip.open(path, "rt", encoding="utf-8") as source:
+            yield from source
     elif path.name.endswith(".tar.gz") or path.suffix == ".tgz":
         with tarfile.open(path, "r:gz") as archive:
             member = _first_regular_member(archive)
@@ -81,19 +95,74 @@ def jsonl_lines(path: Path) -> Iterator[str]:
         with path.open(encoding="utf-8") as source:
             yield from source
     else:
-        raise ValueError(f"Expected a JSONL file, directory, or tar.gz archive: {path}")
+        raise ValueError(f"Expected JSONL, JSONL.GZ, a shard directory, or tar.gz: {path}")
+
+
+def _copy_vector_file(path: Path, output) -> None:
+    opener = gzip.open if path.name.endswith(".jsonl.gz") else open
+    with opener(path, "rb") as source:
+        shutil.copyfileobj(source, output, length=16 * 1024 * 1024)
+
+
+def _feed_fifo(shards: list[str], fifo_path: str, passes: int) -> None:
+    """Feed the two reads performed by Seismic without materializing a merge."""
+    for pass_number in range(passes):
+        with open(fifo_path, "wb", buffering=0) as output:
+            for shard in shards:
+                _copy_vector_file(Path(shard), output)
+        if pass_number + 1 < passes:
+            time.sleep(0.2)
 
 
 @contextmanager
-def seismic_document_input(path: Path, temporary_dir: Path | None = None) -> Iterator[Path]:
-    """Return a SEISMIC-readable file, merging a shard directory when required."""
-    if path.is_file():
+def seismic_document_input(
+    path: Path,
+    temporary_dir: Path | None = None,
+    shard_input_mode: str = "fifo",
+) -> Iterator[Path]:
+    """Return a Seismic input while avoiding a duplicate full-size shard merge."""
+    is_compressed_jsonl = path.name.endswith(".jsonl.gz")
+    if path.is_file() and not is_compressed_jsonl:
         yield path
         return
 
     shards = vector_files(path)
     root = temporary_dir if temporary_dir else Path(tempfile.gettempdir())
     root.mkdir(parents=True, exist_ok=True)
+    if shard_input_mode == "fifo":
+        if not hasattr(os, "mkfifo"):
+            raise RuntimeError(
+                "FIFO shard streaming is unavailable; set index.shard_input_mode=merge"
+            )
+        fifo_root = Path(tempfile.mkdtemp(prefix="seismic-fifo-", dir=root))
+        fifo = fifo_root / "documents.jsonl"
+        os.mkfifo(fifo)
+        methods = multiprocessing.get_all_start_methods()
+        context = multiprocessing.get_context("fork" if "fork" in methods else "spawn")
+        producer = context.Process(
+            target=_feed_fifo,
+            args=([str(shard) for shard in shards], str(fifo), 2),
+            daemon=True,
+        )
+        producer.start()
+        try:
+            yield fifo
+            producer.join(timeout=60)
+            if producer.is_alive():
+                raise RuntimeError("SEISMIC FIFO producer did not finish its two input passes")
+            if producer.exitcode != 0:
+                raise RuntimeError(
+                    f"SEISMIC FIFO producer failed with exit code {producer.exitcode}"
+                )
+        finally:
+            if producer.is_alive():
+                producer.terminate()
+                producer.join()
+            shutil.rmtree(fifo_root, ignore_errors=True)
+        return
+    if shard_input_mode != "merge":
+        raise ValueError("index.shard_input_mode must be 'fifo' or 'merge'")
+
     descriptor, temporary_name = tempfile.mkstemp(
         prefix="seismic-documents-", suffix=".jsonl", dir=root
     )
@@ -102,8 +171,7 @@ def seismic_document_input(path: Path, temporary_dir: Path | None = None) -> Ite
     try:
         with merged.open("wb") as output:
             for shard in shards:
-                with shard.open("rb") as source:
-                    shutil.copyfileobj(source, output, length=16 * 1024 * 1024)
+                _copy_vector_file(shard, output)
             output.flush()
             os.fsync(output.fileno())
         yield merged

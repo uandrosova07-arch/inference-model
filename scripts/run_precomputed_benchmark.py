@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator
 import gc
 import json
 import multiprocessing
 import os
-from pathlib import Path
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterator
+from pathlib import Path
 
 import numpy as np
 
 from scripts.evaluate_run import evaluate, load_builtin_qrels, load_run
-
 
 EXPECTED_DOCUMENTS = 8_841_823
 EXPECTED_QUERIES = 6_980
@@ -67,7 +66,11 @@ def files_size(path: Path) -> int:
 def first_tar_member(archive: tarfile.TarFile):
     for member in archive:
         name = Path(member.name).name
-        if member.isfile() and not name.startswith("._") and "__MACOSX" not in Path(member.name).parts:
+        if (
+            member.isfile()
+            and not name.startswith("._")
+            and "__MACOSX" not in Path(member.name).parts
+        ):
             return member
     raise ValueError(f"No regular file in {archive.name}")
 
@@ -250,7 +253,9 @@ def feed_fifo_from_tar(archive_path: str, fifo_path: str, passes: int) -> None:
 def seismic_input(documents_path: Path) -> tuple[Path, multiprocessing.Process | None]:
     if not documents_path.name.endswith(".tar.gz"):
         return documents_path, None
-    temporary_root = Path("/kaggle/temp") if Path("/kaggle/temp").exists() else Path(tempfile.gettempdir())
+    temporary_root = (
+        Path("/kaggle/temp") if Path("/kaggle/temp").exists() else Path(tempfile.gettempdir())
+    )
     fifo_path = temporary_root / "seismic-precomputed-documents.jsonl"
     fifo_path.unlink(missing_ok=True)
     os.mkfifo(fifo_path)
@@ -295,7 +300,9 @@ def build_seismic(documents_path: Path, index_prefix: Path, args: argparse.Names
             input_path.unlink(missing_ok=True)
     seconds = time.perf_counter() - started
     if args.expected_docs and index.len != args.expected_docs:
-        raise RuntimeError(f"SEISMIC indexed {index.len:,} documents, expected {args.expected_docs:,}")
+        raise RuntimeError(
+            f"SEISMIC indexed {index.len:,} documents, expected {args.expected_docs:,}"
+        )
     index_path = Path(f"{index_prefix}.index.seismic")
     return index, {
         "seconds": seconds,
@@ -307,7 +314,9 @@ def build_seismic(documents_path: Path, index_prefix: Path, args: argparse.Names
     }
 
 
-def seismic_search(index, query_records: list[dict], run_path: Path, args: argparse.Namespace) -> dict:
+def seismic_search(
+    index, query_records: list[dict], run_path: Path, args: argparse.Namespace
+) -> dict:
     from seismic import get_seismic_string
 
     string_type = get_seismic_string()
@@ -410,7 +419,9 @@ def main() -> None:
         query_records = read_vectors(args.queries)
         report["query_load_seconds"] = time.perf_counter() - query_started
         if args.expected_queries and len(query_records) != args.expected_queries:
-            raise RuntimeError(f"Loaded {len(query_records):,} queries, expected {args.expected_queries:,}")
+            raise RuntimeError(
+                f"Loaded {len(query_records):,} queries, expected {args.expected_queries:,}"
+            )
 
     if args.stage in ("all", "baseline-index"):
         report["baseline_index"] = build_baseline_index(args.documents, baseline_index_dir, args)

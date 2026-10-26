@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 
 # Hydra 1.3 uses a lazily rendered help object. Python 3.14's argparse started
@@ -23,17 +22,16 @@ import hydra
 from omegaconf import DictConfig
 
 from src.pipeline.runner import PipelineRunner
+from src.utils.logging import configure_logging
 from src.utils.reproducibility import seed_everything
 
 
 @hydra.main(version_base=None, config_path="src/configs", config_name="config")
 def main(config: DictConfig) -> None:
+    project_root = Path(__file__).resolve().parent
+    configure_logging(config, project_root)
     seed_everything(int(config.seed))
-    logging.basicConfig(
-        level=getattr(logging, str(config.runtime.log_level).upper()),
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
-    PipelineRunner(config, project_root=Path(__file__).resolve().parent).run()
+    PipelineRunner(config, project_root=project_root).run()
 
 
 if __name__ == "__main__":

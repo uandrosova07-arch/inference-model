@@ -7,7 +7,6 @@ then forwards all unknown arguments as Hydra overrides.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import os
 import subprocess
 import sys
@@ -25,8 +24,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 
 
 def ensure_requirements(skip: bool, wheelhouse: Path | None) -> None:
-    required_modules = ("hydra", "sentence_transformers", "seismic", "pyserini")
-    if skip or all(importlib.util.find_spec(name) is not None for name in required_modules):
+    if skip:
         return
     command = [
         sys.executable,

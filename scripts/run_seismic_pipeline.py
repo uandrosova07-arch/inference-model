@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
+from collections import Counter
+from pathlib import Path
 
 import numpy as np
 
 from scripts.evaluate_run import evaluate, load_builtin_qrels, load_run
-
 
 EXPECTED_MSMARCO_DOCUMENTS = 8_841_823
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs" / "baseline"
@@ -22,7 +21,9 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs" / "basel
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vectors-dir", type=Path, required=True)
-    parser.add_argument("--queries", type=Path, required=True, help="Pretokenized Pyserini TSV queries.")
+    parser.add_argument(
+        "--queries", type=Path, required=True, help="Pretokenized Pyserini TSV queries."
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--expected-docs", type=int, default=EXPECTED_MSMARCO_DOCUMENTS)
     parser.add_argument("--threads", type=int, default=max(1, os.cpu_count() or 1))
@@ -70,7 +71,10 @@ def merge_shards(shards: list[Path], destination: Path) -> tuple[int, int]:
                     documents += block.count(b"\n")
                     output.write(block)
             if shard_number % 100 == 0 or shard_number == len(shards):
-                print(f"Merged {shard_number}/{len(shards)} shards; documents={documents:,}", flush=True)
+                print(
+                    f"Merged {shard_number}/{len(shards)} shards; documents={documents:,}",
+                    flush=True,
+                )
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(destination)
@@ -86,7 +90,9 @@ def read_queries(path: Path) -> list[tuple[str, dict[str, float]]]:
             except ValueError as error:
                 raise ValueError(f"Invalid query row {line_number} in {path}") from error
             token_counts = Counter(weighted_tokens.split())
-            queries.append((query_id, {token: float(value) for token, value in token_counts.items()}))
+            queries.append(
+                (query_id, {token: float(value) for token, value in token_counts.items()})
+            )
     if not queries:
         raise ValueError(f"No queries in {path}")
     return queries

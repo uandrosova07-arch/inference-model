@@ -16,7 +16,6 @@ from huggingface_hub import snapshot_download
 
 from config import BASELINE_MODEL_DIR, BASELINE_MODEL_ID, PROJECT_DIR
 
-
 DEFAULT_DATA_DIR = Path("/kaggle/input/msmarco")
 DEFAULT_OUTPUT_DIR = PROJECT_DIR / "outputs" / "baseline"
 EXPECTED_MSMARCO_DOCUMENTS = 8_841_823
@@ -26,7 +25,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--model", default=None, help="Local model path; downloaded once when omitted.")
+    parser.add_argument(
+        "--model", default=None, help="Local model path; downloaded once when omitted."
+    )
     parser.add_argument("--gpus", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--bucket-multiplier", type=int, default=32)
@@ -90,14 +91,14 @@ def summarize_encoding(output_dir: Path, wall_seconds: float) -> dict[str, float
         **totals,
         "wall_seconds_current_invocation": wall_seconds,
         "estimated_parallel_encode_seconds": max(seconds_by_rank.values(), default=0.0),
-        "combined_docs_per_second":
-            totals["documents"] / max(max(seconds_by_rank.values(), default=0.0), 1e-9),
+        "combined_docs_per_second": totals["documents"]
+        / max(max(seconds_by_rank.values(), default=0.0), 1e-9),
         "avg_non_zero_terms": totals["non_zero_terms"] / documents,
         "padding_fraction": (totals["padded_tokens"] - totals["unpadded_tokens"]) / padded,
-        "padding_saved_vs_naive_fraction":
-            (totals["naive_padded_tokens"] - totals["padded_tokens"]) / naive,
-        "tokens_saved_vs_fixed_fraction":
-            (totals["fixed_length_tokens"] - totals["padded_tokens"]) / fixed,
+        "padding_saved_vs_naive_fraction": (totals["naive_padded_tokens"] - totals["padded_tokens"])
+        / naive,
+        "tokens_saved_vs_fixed_fraction": (totals["fixed_length_tokens"] - totals["padded_tokens"])
+        / fixed,
     }
 
 

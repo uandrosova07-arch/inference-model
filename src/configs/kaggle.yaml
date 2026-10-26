@@ -5,4 +5,12 @@ defaults:
 runtime:
   output_dir: /kaggle/working/inference-model/outputs/${experiment.name}
   temporary_dir: /kaggle/temp
+  require_cuda: true
+
+dataset:
+  documents: /kaggle/input/msmarco/collection.tsv
+
+model:
+  compress_vectors: true
+  gzip_level: 1
 

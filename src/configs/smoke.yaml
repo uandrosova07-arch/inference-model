@@ -11,6 +11,7 @@ dataset:
   max_queries: 100
   query_source: file
   qrels_source: file
+  validate_document_count: false
 
 model:
   batch_size: 8

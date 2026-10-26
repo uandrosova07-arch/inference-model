@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import logging
+import platform
+import shutil
+import socket
+import sys
 import time
 from collections.abc import Callable
 from copy import deepcopy
@@ -16,7 +21,13 @@ from src.datasets import load_qrels, read_queries
 from src.index import build_index, search_index
 from src.metrics import evaluate, load_run
 from src.model import encode_documents, encode_queries
-from src.utils.io import atomic_write_json, directory_size, resolve_path, stable_hash
+from src.utils.io import (
+    atomic_write_json,
+    count_lines,
+    directory_size,
+    resolve_path,
+    stable_hash,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,12 +61,16 @@ class PipelineRunner:
         }
 
     def run(self) -> dict[str, Any]:
+        pipeline_started = time.perf_counter()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.paths["state_dir"].mkdir(parents=True, exist_ok=True)
         self.paths["resolved_config"].parent.mkdir(parents=True, exist_ok=True)
         OmegaConf.save(self.omega_config, self.paths["resolved_config"], resolve=True)
 
         requested = self._requested_stages()
+        LOGGER.info("Experiment: %s", self.config["experiment"]["name"])
+        LOGGER.info("Output directory: %s", self.output_dir)
+        LOGGER.info("Resolved config: %s", self.paths["resolved_config"])
         LOGGER.info("Pipeline stages: %s", " -> ".join(requested))
         summary: dict[str, Any] = {"experiment": self.config["experiment"]["name"], "stages": {}}
         for stage_name in requested:
@@ -76,6 +91,7 @@ class PipelineRunner:
 
             LOGGER.info("[%s] starting", stage_name)
             started = time.perf_counter()
+            started_at = datetime.now(timezone.utc).isoformat()
             try:
                 result = self.stages[stage_name]()
                 elapsed = time.perf_counter() - started
@@ -83,6 +99,7 @@ class PipelineRunner:
                     "stage": stage_name,
                     "status": "success",
                     "signature": signature,
+                    "started_at": started_at,
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "seconds": elapsed,
                     "outputs": [str(path) for path in result.outputs],
@@ -92,19 +109,56 @@ class PipelineRunner:
                 summary["stages"][stage_name] = {"status": "success", **result.metrics}
                 LOGGER.info("[%s] complete in %.2fs", stage_name, elapsed)
             except Exception as error:
+                LOGGER.exception("[%s] failed", stage_name)
                 atomic_write_json(
                     self._state_path(stage_name),
                     {
                         "stage": stage_name,
                         "status": "failed",
                         "signature": signature,
+                        "started_at": started_at,
                         "failed_at": datetime.now(timezone.utc).isoformat(),
                         "error": f"{type(error).__name__}: {error}",
                     },
                 )
                 raise
+        invocation_seconds = time.perf_counter() - pipeline_started
+        summary["current_invocation_seconds"] = invocation_seconds
         LOGGER.info("Artifacts: %s", self.output_dir)
+        LOGGER.info("Pipeline invocation complete in %.2fs", invocation_seconds)
+        self._finalize_report(invocation_seconds)
         return summary
+
+    def _finalize_report(self, invocation_seconds: float) -> None:
+        if not self.paths["report"].exists():
+            return
+        report = json.loads(self.paths["report"].read_text(encoding="utf-8"))
+        states = {}
+        cumulative_seconds = 0.0
+        for name in self.config["pipeline"]["stages"]:
+            state = self._read_state(name)
+            if state and state.get("status") == "success":
+                states[name] = {
+                    "started_at": state.get("started_at"),
+                    "completed_at": state.get("completed_at"),
+                    "seconds": state.get("seconds"),
+                    **state.get("metrics", {}),
+                }
+                cumulative_seconds += float(state.get("seconds", 0.0))
+        report["stages"] = states
+        report["timing"] = {
+            "current_invocation_seconds": invocation_seconds,
+            "cumulative_stage_seconds": cumulative_seconds,
+        }
+        report.setdefault("artifacts", {})["pipeline_log"] = {
+            "path": str(self.paths["pipeline_log"]),
+            "bytes": (
+                self.paths["pipeline_log"].stat().st_size
+                if self.paths["pipeline_log"].exists()
+                else None
+            ),
+        }
+        atomic_write_json(self.paths["report"], report)
 
     def _requested_stages(self) -> list[str]:
         configured = list(self.config["pipeline"]["stages"])
@@ -178,7 +232,24 @@ class PipelineRunner:
         documents = resolve_path(dataset["documents"], self.project_root)
         if not documents.exists():
             raise FileNotFoundError(documents)
-        checked = {"documents": str(documents), "documents_bytes": documents.stat().st_size}
+        checked: dict[str, Any] = {
+            "documents": str(documents),
+            "documents_bytes": documents.stat().st_size,
+        }
+        if bool(dataset.get("validate_document_count", True)):
+            document_count = count_lines(documents)
+            checked["documents_count"] = document_count
+            expected = dataset.get("expected_documents")
+            max_documents = dataset.get("max_documents")
+            if max_documents is None and expected is not None and document_count != int(expected):
+                raise RuntimeError(
+                    f"Dataset contains {document_count:,} documents, expected {int(expected):,}"
+                )
+            if max_documents is not None and document_count < int(max_documents):
+                raise RuntimeError(
+                    f"Dataset contains {document_count:,} documents, fewer than "
+                    f"dataset.max_documents={int(max_documents):,}"
+                )
         if dataset["query_source"] == "file":
             queries = resolve_path(dataset["queries"], self.project_root)
             if not queries.exists():
@@ -189,9 +260,72 @@ class PipelineRunner:
             if not qrels.exists():
                 raise FileNotFoundError(qrels)
             checked.update(qrels=str(qrels), qrels_bytes=qrels.stat().st_size)
+        configured_queries = read_queries(
+            source=str(dataset["query_source"]),
+            path=resolve_path(dataset["queries"], self.project_root),
+            topics_name=str(dataset["pyserini_topics"]),
+            limit=dataset.get("max_queries"),
+        )
+        configured_qrels = load_qrels(
+            source=str(dataset["qrels_source"]),
+            path=resolve_path(dataset["qrels"], self.project_root),
+            qrels_name=str(dataset["pyserini_qrels"]),
+        )
+        query_ids = {query_id for query_id, _ in configured_queries}
+        checked["queries_count"] = len(configured_queries)
+        checked["qrels_queries"] = len(
+            {query_id for query_id in configured_qrels if query_id in query_ids}
+        )
+        checked["environment"] = self._environment_info()
         manifest = self.paths["state_dir"] / "dataset.json"
         atomic_write_json(manifest, checked)
+        LOGGER.info("Input validation complete: %s", checked)
         return StageResult([manifest], checked)
+
+    def _environment_info(self) -> dict[str, Any]:
+        import torch
+
+        cuda_devices = []
+        if torch.cuda.is_available():
+            for index in range(torch.cuda.device_count()):
+                properties = torch.cuda.get_device_properties(index)
+                cuda_devices.append(
+                    {
+                        "index": index,
+                        "name": properties.name,
+                        "total_memory_bytes": properties.total_memory,
+                    }
+                )
+        if bool(self.config["runtime"].get("require_cuda", False)) and not cuda_devices:
+            raise RuntimeError("CUDA is required by this config, but no CUDA device is available")
+
+        package_versions = {}
+        for package in (
+            "torch",
+            "sentence-transformers",
+            "transformers",
+            "pyseismic-lsr",
+            "pyserini",
+            "hydra-core",
+        ):
+            try:
+                package_versions[package] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                package_versions[package] = None
+
+        output_disk = shutil.disk_usage(self.output_dir)
+        temporary_root = self.temporary_dir or self.output_dir
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        temporary_disk = shutil.disk_usage(temporary_root)
+        return {
+            "hostname": socket.gethostname(),
+            "platform": platform.platform(),
+            "python": sys.version,
+            "packages": package_versions,
+            "cuda_devices": cuda_devices,
+            "output_disk_free_bytes": output_disk.free,
+            "temporary_disk_free_bytes": temporary_disk.free,
+        }
 
     def _encode_documents(self) -> StageResult:
         dataset = self.config["dataset"]
@@ -202,6 +336,7 @@ class PipelineRunner:
             project_root=self.project_root,
             max_documents=dataset.get("max_documents"),
             expected_documents=dataset.get("expected_documents"),
+            log_dir=self.paths["log_dir"],
         )
         result["vector_bytes"] = directory_size(self.paths["document_vectors"])
         return StageResult([self.paths["document_vectors"]], result)
@@ -305,7 +440,15 @@ class PipelineRunner:
                     "bytes": directory_size(path) if path.exists() else None,
                 }
                 for name, path in self.paths.items()
-                if name in {"document_vectors", "query_vectors", "index_file", "run"}
+                if name
+                in {
+                    "document_vectors",
+                    "query_vectors",
+                    "index_file",
+                    "run",
+                    "log_dir",
+                    "pipeline_log",
+                }
             },
         }
         atomic_write_json(self.paths["report"], report)

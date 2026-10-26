@@ -9,21 +9,20 @@ processing order while avoiding the memory cost of sorting the full corpus.
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
 import json
 import math
 import os
 import time
+from collections.abc import Iterable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 import torch
 from sentence_transformers import SparseEncoder
 from tqdm import tqdm
 
 from config import baseline_model_path, msmarco_dir
-
 
 COLLECTION_PATH = msmarco_dir() / "collection.tsv"
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs" / "baseline" / "vectors"
@@ -42,7 +41,7 @@ class PaddingStats:
     non_zero_terms: int = 0
     encode_seconds: float = 0.0
 
-    def add(self, other: "PaddingStats") -> None:
+    def add(self, other: PaddingStats) -> None:
         for field in asdict(self):
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
@@ -56,8 +55,10 @@ class PaddingStats:
             "docs_per_second": self.documents / seconds,
             "avg_non_zero_terms": self.non_zero_terms / max(self.documents, 1),
             "padding_fraction": (self.padded_tokens - self.unpadded_tokens) / padded,
-            "padding_saved_vs_naive_fraction": (self.naive_padded_tokens - self.padded_tokens) / naive,
-            "tokens_saved_vs_fixed_fraction": (self.fixed_length_tokens - self.padded_tokens) / fixed,
+            "padding_saved_vs_naive_fraction": (self.naive_padded_tokens - self.padded_tokens)
+            / naive,
+            "tokens_saved_vs_fixed_fraction": (self.fixed_length_tokens - self.padded_tokens)
+            / fixed,
         }
 
 
@@ -78,7 +79,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-docs", type=int, default=None, help="Useful for smoke tests.")
     parser.add_argument("--total-docs", type=int, default=DEFAULT_COLLECTION_SIZE)
     parser.add_argument("--device", default=None, help="cpu, mps, cuda, or auto when omitted.")
-    parser.add_argument("--local-rank", "--local_rank", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--local-rank", "--local_rank", type=int, default=None, help=argparse.SUPPRESS
+    )
     parser.add_argument(
         "--precision",
         choices=("auto", "fp32", "fp16", "bf16"),
@@ -155,7 +158,9 @@ def encode_window(
             padding=True,
             return_tensors="pt",
         )
-        stats.padded_tokens += int(features["attention_mask"].shape[0] * features["attention_mask"].shape[1])
+        stats.padded_tokens += int(
+            features["attention_mask"].shape[0] * features["attention_mask"].shape[1]
+        )
         features = {
             key: value.to(model.device) if isinstance(value, torch.Tensor) else value
             for key, value in features.items()
@@ -202,7 +207,9 @@ def encode_shard(
             encoded, window_stats = encode_window(model, window, batch_size, max_length, precision)
             stats.add(window_stats)
             for doc_id, vector in encoded:
-                output.write(json.dumps({"id": doc_id, "vector": vector}, separators=(",", ":")) + "\n")
+                output.write(
+                    json.dumps({"id": doc_id, "vector": vector}, separators=(",", ":")) + "\n"
+                )
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(destination)

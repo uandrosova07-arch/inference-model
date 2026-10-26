@@ -15,6 +15,7 @@ runtime:
   output_dir: outputs/${experiment.name}
   temporary_dir: null
   log_level: INFO
+  require_cuda: false
 
 pipeline:
   stages: [prepare, encode_documents, encode_queries, build_index, search, metrics]
@@ -33,6 +34,8 @@ paths:
   run: ${runtime.output_dir}/seismic/run.dev.trec
   report: ${runtime.output_dir}/report.json
   per_query_metrics: ${runtime.output_dir}/metrics/per_query.jsonl
+  log_dir: ${runtime.output_dir}/logs
+  pipeline_log: ${paths.log_dir}/pipeline.log
   state_dir: ${runtime.output_dir}/state
   resolved_config: ${runtime.output_dir}/config.yaml
 

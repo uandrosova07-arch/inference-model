@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -15,14 +16,26 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
 
+def _write_jsonl_gz(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8", compresslevel=1) as output:
+        for record in records:
+            output.write(json.dumps(record) + "\n")
+
+
 def test_build_and_search_tiny_index(tmp_path) -> None:
-    documents = tmp_path / "documents.jsonl"
+    documents = tmp_path / "document_shards"
     queries = tmp_path / "queries.jsonl"
-    _write_jsonl(
-        documents,
+    _write_jsonl_gz(
+        documents / "part-00.jsonl.gz",
         [
             {"id": "d1", "vector": {"cat": 2.0, "pet": 1.0}},
             {"id": "d2", "vector": {"dog": 2.0, "pet": 1.0}},
+        ],
+    )
+    _write_jsonl_gz(
+        documents / "part-01.jsonl.gz",
+        [
             {"id": "d3", "vector": {"car": 3.0}},
         ],
     )
@@ -45,6 +58,7 @@ def test_build_and_search_tiny_index(tmp_path) -> None:
             "load_content": False,
             "threads": 1,
             "expected_documents": 3,
+            "shard_input_mode": "fifo",
         },
         temporary_dir=tmp_path,
     )

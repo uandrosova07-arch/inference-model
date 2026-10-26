@@ -10,8 +10,9 @@ from sentence_transformers import SparseEncoder
 from config import baseline_model_path
 from scripts.index_baseline import encode_window
 
-
-DEFAULT_OUTPUT = Path(__file__).resolve().parent.parent / "outputs" / "baseline" / "queries.dev.splade.tsv"
+DEFAULT_OUTPUT = (
+    Path(__file__).resolve().parent.parent / "outputs" / "baseline" / "queries.dev.splade.tsv"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,9 +58,7 @@ def main() -> None:
     with temporary.open("w", encoding="utf-8") as output:
         for query_id, vector in encoded:
             weighted_tokens = " ".join(
-                token
-                for token, weight in vector.items()
-                for _ in range(weight)
+                token for token, weight in vector.items() for _ in range(weight)
             )
             output.write(f"{query_id}\t{weighted_tokens}\n")
     temporary.replace(args.output)
