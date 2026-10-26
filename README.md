@@ -88,3 +88,32 @@ PYTHONPATH=. python scripts/run_seismic_pipeline.py \
 - `outputs/baseline/seismic/run.dev.tsv` — top-1000 выдача;
 - `outputs/baseline/seismic/retrieval_metrics.json` — MRR@10 и Recall@1000;
 - `outputs/baseline/seismic/pipeline_metrics.json` — время, QPS и размеры.
+
+## Benchmark на готовых векторах без повторного GPU-кодирования
+
+Официальные готовые представления MS MARCO Passage для SPLADE Co-Condenser
+опубликованы в
+[`tuskanny/seismic-msmarco-splade`](https://huggingface.co/datasets/tuskanny/seismic-msmarco-splade/tree/main):
+
+- `documents.tar.gz`;
+- `queries.tar.gz`.
+
+Архивы можно подключить как Kaggle Dataset. Распаковывать 33 GiB JSONL не
+нужно: Lucene индексируется непосредственно из потока архива, а SEISMIC читает
+тот же архив через FIFO в два прохода. Команда измеряет четыре отдельных этапа:
+
+1. построение Lucene impact index;
+2. поиск Lucene;
+3. построение SEISMIC index;
+4. поиск SEISMIC.
+
+```bash
+PYTHONPATH=. python scripts/run_precomputed_benchmark.py \
+  --documents /kaggle/input/msmarco-splade-vectors/documents.tar.gz \
+  --queries /kaggle/input/msmarco-splade-vectors/queries.tar.gz \
+  --output-dir /kaggle/working/inference-model/outputs/precomputed_benchmark \
+  --threads 4
+```
+
+Все времена, размеры, QPS, MRR@10, Recall@1000 и относительное ускорение
+сохраняются в `outputs/precomputed_benchmark/benchmark_metrics.json`.
