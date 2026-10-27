@@ -30,7 +30,10 @@ from src.utils.reproducibility import seed_everything
 def main(config: DictConfig) -> None:
     project_root = Path(__file__).resolve().parent
     configure_logging(config, project_root)
-    seed_everything(int(config.seed))
+    seed_everything(
+        int(config.seed),
+        deterministic=bool(config.runtime.get("deterministic", True)),
+    )
     PipelineRunner(config, project_root=project_root).run()
 
 

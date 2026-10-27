@@ -7,6 +7,9 @@ defaults:
 
 experiment:
   name: baseline
+  kind: experiment
+  parent_manifest: null
+  change_note: null
 
 seed: 42
 
@@ -16,6 +19,9 @@ runtime:
   temporary_dir: null
   log_level: INFO
   require_cuda: false
+  deterministic: true
+  fingerprint_artifacts: true
+  require_clean_git: false
 
 pipeline:
   stages: [prepare, encode_documents, encode_queries, build_index, search, metrics]
@@ -38,6 +44,9 @@ paths:
   pipeline_log: ${paths.log_dir}/pipeline.log
   state_dir: ${runtime.output_dir}/state
   resolved_config: ${runtime.output_dir}/config.yaml
+  environment: ${runtime.output_dir}/environment.json
+  package_snapshot: ${runtime.output_dir}/packages.freeze.txt
+  manifest: ${runtime.output_dir}/manifest.json
 
 hydra:
   job:

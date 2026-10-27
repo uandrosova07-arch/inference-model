@@ -50,6 +50,14 @@ def has_documents_override(overrides: Sequence[str]) -> bool:
     )
 
 
+def override_value(overrides: Sequence[str], name: str, default: str) -> str:
+    for override in reversed(overrides):
+        key, separator, value = override.lstrip("+").partition("=")
+        if separator and key == name:
+            return value
+    return default
+
+
 def discover_msmarco_collection(
     input_dir: Path = KAGGLE_INPUT_DIR,
     environment: Mapping[str, str] | None = None,
@@ -106,6 +114,8 @@ def main() -> None:
     environment.setdefault("PYTHONPATH", str(PROJECT_DIR))
     environment.setdefault("PYTHONUNBUFFERED", "1")
     environment.setdefault("TOKENIZERS_PARALLELISM", "false")
+    environment.setdefault("PYTHONHASHSEED", override_value(overrides, "seed", "42"))
+    environment.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     if Path("/kaggle/working").exists():
         environment.setdefault("HF_HOME", "/kaggle/working/.cache/huggingface")
     subprocess.check_call(

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import logging
-import platform
 import shutil
-import socket
 import sys
 import time
 from collections.abc import Callable
@@ -23,11 +20,15 @@ from src.metrics import evaluate, load_run
 from src.model import encode_documents, encode_queries
 from src.utils.io import (
     atomic_write_json,
-    count_lines,
+    atomic_write_text,
     directory_size,
+    file_fingerprint,
+    path_fingerprint,
+    path_inventory,
     resolve_path,
     stable_hash,
 )
+from src.utils.reproducibility import environment_snapshot, git_metadata
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class PipelineRunner:
         self.output_dir = resolve_path(self.config["runtime"]["output_dir"], project_root)
         temporary = self.config["runtime"].get("temporary_dir")
         self.temporary_dir = resolve_path(temporary, project_root) if temporary else None
+        self.parent_manifest_info: dict[str, Any] | None = None
         self.stages: dict[str, Callable[[], StageResult]] = {
             "prepare": self._prepare,
             "encode_documents": self._encode_documents,
@@ -65,7 +67,25 @@ class PipelineRunner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.paths["state_dir"].mkdir(parents=True, exist_ok=True)
         self.paths["resolved_config"].parent.mkdir(parents=True, exist_ok=True)
+        self.parent_manifest_info = self._parent_manifest_info()
         OmegaConf.save(self.omega_config, self.paths["resolved_config"], resolve=True)
+        environment = self._environment_info()
+        if bool(self.config["runtime"].get("require_clean_git", False)):
+            git = environment["git"]
+            if not git.get("commit"):
+                raise RuntimeError("A Git checkout is required for a baseline run")
+            if git.get("dirty"):
+                raise RuntimeError(
+                    "Baseline run requires a clean Git checkout; commit or remove local changes"
+                )
+        atomic_write_json(self.paths["environment"], environment)
+        atomic_write_text(
+            self.paths["package_snapshot"],
+            "".join(
+                f"{name}=={version}\n"
+                for name, version in environment.get("packages", {}).items()
+            ),
+        )
 
         requested = self._requested_stages()
         LOGGER.info("Experiment: %s", self.config["experiment"]["name"])
@@ -83,7 +103,7 @@ class PipelineRunner:
                 and state
                 and state.get("status") == "success"
                 and state.get("signature") == signature
-                and all(Path(path).exists() for path in state.get("outputs", []))
+                and self._outputs_match(state)
             ):
                 LOGGER.info("[%s] already complete; skipping", stage_name)
                 summary["stages"][stage_name] = {"status": "skipped", **state.get("metrics", {})}
@@ -103,6 +123,9 @@ class PipelineRunner:
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "seconds": elapsed,
                     "outputs": [str(path) for path in result.outputs],
+                    "output_inventory": {
+                        str(path): path_inventory(path) for path in result.outputs
+                    },
                     "metrics": result.metrics,
                 }
                 atomic_write_json(self._state_path(stage_name), stage_state)
@@ -127,7 +150,28 @@ class PipelineRunner:
         LOGGER.info("Artifacts: %s", self.output_dir)
         LOGGER.info("Pipeline invocation complete in %.2fs", invocation_seconds)
         self._finalize_report(invocation_seconds)
+        LOGGER.info("Finalizing reproducibility manifest with artifact fingerprints")
+        manifest = self._finalize_manifest()
+        summary["manifest"] = str(manifest)
         return summary
+
+    def _outputs_match(self, state: dict[str, Any]) -> bool:
+        outputs = [Path(path) for path in state.get("outputs", [])]
+        if not outputs or not all(path.exists() for path in outputs):
+            return False
+        expected = state.get("output_inventory")
+        if not expected:
+            return True
+        return all(path_inventory(path) == expected.get(str(path)) for path in outputs)
+
+    def _parent_manifest_info(self) -> dict[str, Any] | None:
+        configured = self.config["experiment"].get("parent_manifest")
+        if not configured:
+            return None
+        path = resolve_path(str(configured), self.project_root)
+        if not path.is_file():
+            raise FileNotFoundError(f"Parent experiment manifest not found: {path}")
+        return {"path": str(path), **file_fingerprint(path)}
 
     def _finalize_report(self, invocation_seconds: float) -> None:
         if not self.paths["report"].exists():
@@ -159,6 +203,108 @@ class PipelineRunner:
             ),
         }
         atomic_write_json(self.paths["report"], report)
+
+    def _finalize_manifest(self) -> Path:
+        started = time.perf_counter()
+        artifact_names = (
+            "document_vectors",
+            "query_vectors",
+            "index_file",
+            "run",
+            "per_query_metrics",
+            "resolved_config",
+            "report",
+            "pipeline_log",
+            "log_dir",
+            "environment",
+            "package_snapshot",
+            "state_dir",
+        )
+        use_content_hashes = bool(self.config["runtime"].get("fingerprint_artifacts", True))
+        artifacts = {}
+        for name in artifact_names:
+            path = self.paths.get(name)
+            if path is None or not path.exists():
+                continue
+            artifacts[name] = {
+                "path": str(path),
+                **(path_fingerprint(path) if use_content_hashes else path_inventory(path)),
+            }
+        local_model = resolve_path(str(self.config["model"]["local_path"]), self.project_root)
+        if local_model.exists():
+            artifacts["model"] = {
+                "path": str(local_model),
+                **(
+                    path_fingerprint(local_model)
+                    if use_content_hashes
+                    else path_inventory(local_model)
+                ),
+            }
+
+        dataset_state_path = self.paths["state_dir"] / "dataset.json"
+        dataset_state = (
+            json.loads(dataset_state_path.read_text(encoding="utf-8"))
+            if dataset_state_path.exists()
+            else None
+        )
+        environment = (
+            json.loads(self.paths["environment"].read_text(encoding="utf-8"))
+            if self.paths["environment"].exists()
+            else self._environment_info()
+        )
+        report = (
+            json.loads(self.paths["report"].read_text(encoding="utf-8"))
+            if self.paths["report"].exists()
+            else None
+        )
+        identity = {
+            "git_commit": environment.get("git", {}).get("commit"),
+            "config_sha256": artifacts.get("resolved_config", {}).get("sha256"),
+            "documents_sha256": (dataset_state or {}).get("documents_sha256"),
+            "queries_sha256": (dataset_state or {}).get("queries_sha256"),
+            "qrels_sha256": (dataset_state or {}).get("qrels_sha256"),
+            "model": self.config["model"].get("name_or_path"),
+            "model_revision": self.config["model"].get("revision"),
+            "model_sha256": artifacts.get("model", {}).get("sha256"),
+        }
+        artifact_identities = {
+            name: {
+                "bytes": value.get("bytes"),
+                "sha256": value.get("sha256"),
+                "signature": value.get("signature"),
+            }
+            for name, value in artifacts.items()
+        }
+        manifest = {
+            "schema_version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "configuration_id": stable_hash(identity)[:16],
+            "run_id": stable_hash(
+                {"identity": identity, "artifacts": artifact_identities}
+            )[:16],
+            "experiment": self.config["experiment"],
+            "parent_manifest": self.parent_manifest_info,
+            "identity": identity,
+            "dataset": dataset_state,
+            "environment": {
+                "git": environment.get("git"),
+                "platform": environment.get("platform"),
+                "machine": environment.get("machine"),
+                "processor": environment.get("processor"),
+                "cpu_count": environment.get("cpu_count"),
+                "python": environment.get("python"),
+                "torch_runtime": environment.get("torch_runtime"),
+                "packages_sha256": stable_hash(environment.get("packages", {})),
+                "environment_file": str(self.paths["environment"]),
+                "package_snapshot_file": str(self.paths["package_snapshot"]),
+            },
+            "effectiveness": (report or {}).get("effectiveness"),
+            "timing": (report or {}).get("timing"),
+            "artifacts": artifacts,
+        }
+        manifest["fingerprint_seconds"] = time.perf_counter() - started
+        atomic_write_json(self.paths["manifest"], manifest)
+        return self.paths["manifest"]
 
     def _requested_stages(self) -> list[str]:
         configured = list(self.config["pipeline"]["stages"])
@@ -200,11 +346,9 @@ class PipelineRunner:
         for name in input_names:
             path = self.paths[name]
             if path.exists():
-                stat = path.stat()
                 fingerprint["inputs"][name] = {
                     "path": str(path),
-                    "size": stat.st_size,
-                    "mtime_ns": stat.st_mtime_ns,
+                    "inventory": path_inventory(path),
                 }
         dataset_input = {
             "prepare": "documents",
@@ -219,11 +363,9 @@ class PipelineRunner:
             if dataset_input == "documents" or source_mode == "file":
                 path = resolve_path(self.config["dataset"][dataset_input], self.project_root)
                 if path.exists():
-                    stat = path.stat()
                     fingerprint["inputs"][f"dataset.{dataset_input}"] = {
                         "path": str(path),
-                        "size": stat.st_size,
-                        "mtime_ns": stat.st_mtime_ns,
+                        "inventory": path_inventory(path),
                     }
         return stable_hash(fingerprint)
 
@@ -232,12 +374,14 @@ class PipelineRunner:
         documents = resolve_path(dataset["documents"], self.project_root)
         if not documents.exists():
             raise FileNotFoundError(documents)
+        document_fingerprint = file_fingerprint(documents, include_lines=True)
         checked: dict[str, Any] = {
             "documents": str(documents),
-            "documents_bytes": documents.stat().st_size,
+            "documents_bytes": document_fingerprint["bytes"],
+            "documents_sha256": document_fingerprint["sha256"],
         }
         if bool(dataset.get("validate_document_count", True)):
-            document_count = count_lines(documents)
+            document_count = int(document_fingerprint["lines"])
             checked["documents_count"] = document_count
             expected = dataset.get("expected_documents")
             max_documents = dataset.get("max_documents")
@@ -273,59 +417,61 @@ class PipelineRunner:
         )
         query_ids = {query_id for query_id, _ in configured_queries}
         checked["queries_count"] = len(configured_queries)
+        checked["queries_sha256"] = stable_hash(configured_queries)
         checked["qrels_queries"] = len(
             {query_id for query_id in configured_qrels if query_id in query_ids}
         )
-        checked["environment"] = self._environment_info()
+        checked["qrels_sha256"] = stable_hash(configured_qrels)
+        if self.parent_manifest_info:
+            checked["parent_manifest"] = self.parent_manifest_info
+
+        full_environment = json.loads(self.paths["environment"].read_text(encoding="utf-8"))
+        checked["environment"] = {
+            "platform": full_environment["platform"],
+            "python": full_environment["python"],
+            "cpu_count": full_environment["cpu_count"],
+            "packages": {
+                name: full_environment["packages"].get(name)
+                for name in (
+                    "torch",
+                    "sentence-transformers",
+                    "transformers",
+                    "huggingface-hub",
+                    "pyseismic-lsr",
+                    "pyserini",
+                    "hydra-core",
+                    "numpy",
+                )
+            },
+            "torch_runtime": full_environment["torch_runtime"],
+            "git": full_environment["git"],
+            "output_disk_free_bytes": full_environment["output_disk_free_bytes"],
+            "temporary_disk_free_bytes": full_environment["temporary_disk_free_bytes"],
+        }
         manifest = self.paths["state_dir"] / "dataset.json"
         atomic_write_json(manifest, checked)
         LOGGER.info("Input validation complete: %s", checked)
-        return StageResult([manifest], checked)
+        return StageResult([manifest, self.paths["environment"]], checked)
 
     def _environment_info(self) -> dict[str, Any]:
-        import torch
-
-        cuda_devices = []
-        if torch.cuda.is_available():
-            for index in range(torch.cuda.device_count()):
-                properties = torch.cuda.get_device_properties(index)
-                cuda_devices.append(
-                    {
-                        "index": index,
-                        "name": properties.name,
-                        "total_memory_bytes": properties.total_memory,
-                    }
-                )
+        snapshot = environment_snapshot()
+        torch_runtime = snapshot.get("torch_runtime") or {}
+        cuda_devices = torch_runtime.get("cuda_devices", [])
         if bool(self.config["runtime"].get("require_cuda", False)) and not cuda_devices:
             raise RuntimeError("CUDA is required by this config, but no CUDA device is available")
-
-        package_versions = {}
-        for package in (
-            "torch",
-            "sentence-transformers",
-            "transformers",
-            "pyseismic-lsr",
-            "pyserini",
-            "hydra-core",
-        ):
-            try:
-                package_versions[package] = importlib.metadata.version(package)
-            except importlib.metadata.PackageNotFoundError:
-                package_versions[package] = None
-
         output_disk = shutil.disk_usage(self.output_dir)
         temporary_root = self.temporary_dir or self.output_dir
         temporary_root.mkdir(parents=True, exist_ok=True)
         temporary_disk = shutil.disk_usage(temporary_root)
-        return {
-            "hostname": socket.gethostname(),
-            "platform": platform.platform(),
-            "python": sys.version,
-            "packages": package_versions,
-            "cuda_devices": cuda_devices,
-            "output_disk_free_bytes": output_disk.free,
-            "temporary_disk_free_bytes": temporary_disk.free,
-        }
+        snapshot.update(
+            {
+                "argv": sys.argv,
+                "git": git_metadata(self.project_root),
+                "output_disk_free_bytes": output_disk.free,
+                "temporary_disk_free_bytes": temporary_disk.free,
+            }
+        )
+        return snapshot
 
     def _encode_documents(self) -> StageResult:
         dataset = self.config["dataset"]

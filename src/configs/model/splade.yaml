@@ -1,5 +1,10 @@
 name_or_path: naver/splade-cocondenser-selfdistil
+# Immutable Hub revision used by the baseline. Local model directories ignore it.
+revision: 31f3eb4b5aae648cde974db3b7b44bf2d095106b
 local_path: input/models/splade-cocondenser-selfdistil
+local_files_only: false
+# The pinned revision contains pytorch_model.bin. Avoid mutable Hub conversion PRs.
+use_safetensors: false
 device: auto
 devices: auto
 batch_size: 32

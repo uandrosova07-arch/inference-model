@@ -1,0 +1,23 @@
+defaults:
+  - kaggle
+  - _self_
+
+experiment:
+  name: baseline_v1_msmarco_splade_seismic
+  kind: baseline
+  parent_manifest: null
+  change_note: "Pinned full-corpus SPLADE self-distil plus SEISMIC baseline"
+
+# Kaggle's 2x T4 runtime currently exposes four CPU cores. Keeping this explicit
+# makes index-build and search timing comparable across baseline descendants.
+model:
+  devices: 2
+  precision: fp16
+
+index:
+  threads: 4
+
+runtime:
+  deterministic: true
+  fingerprint_artifacts: true
+  require_clean_git: true

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_pipeline import discover_msmarco_collection, has_documents_override
+from scripts.run_pipeline import discover_msmarco_collection, has_documents_override, override_value
 
 
 def _write_dataset(directory: Path, *, complete: bool = True) -> Path:
@@ -60,3 +60,8 @@ def test_explicit_collection_environment_variable(tmp_path: Path) -> None:
 )
 def test_detects_explicit_hydra_documents_override(override: str) -> None:
     assert has_documents_override([override])
+
+
+def test_reads_last_hydra_override_value() -> None:
+    assert override_value(["seed=1", "+seed=7"], "seed", "42") == "7"
+    assert override_value([], "seed", "42") == "42"

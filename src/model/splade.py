@@ -95,13 +95,29 @@ def _autocast(device: str, precision: str):
 
 
 def _load_model(config: dict[str, Any], project_root: Path, device: str) -> SparseEncoder:
+    source = resolve_model_path(config, project_root)
+    arguments: dict[str, Any] = {
+        "device": device,
+        "trust_remote_code": bool(config.get("trust_remote_code", False)),
+        "local_files_only": bool(config.get("local_files_only", False)),
+    }
+    if not Path(source).exists() and config.get("revision"):
+        arguments["revision"] = str(config["revision"])
+        arguments["model_kwargs"] = {
+            "use_safetensors": bool(config.get("use_safetensors", False)),
+        }
     model = SparseEncoder(
-        resolve_model_path(config, project_root),
-        device=device,
-        trust_remote_code=bool(config.get("trust_remote_code", False)),
+        source,
+        **arguments,
     )
     model.max_seq_length = int(config["max_length"])
     model.eval()
+    LOGGER.info(
+        "Loaded SPLADE model: source=%s, revision=%s, max_length=%s",
+        source,
+        config.get("revision") if not Path(source).exists() else "local",
+        model.max_seq_length,
+    )
     return model
 
 
@@ -311,6 +327,8 @@ def _document_worker(
             "world_size": world_size,
             "device": device,
             "precision": precision,
+            "model_source": resolve_model_path(config, root),
+            "model_revision": config.get("revision"),
             **total.report(),
         },
     )
@@ -471,6 +489,12 @@ def encode_queries(
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(destination)
-    result = {"device": device, "precision": precision, **total.report()}
+    result = {
+        "device": device,
+        "precision": precision,
+        "model_source": resolve_model_path(config, project_root),
+        "model_revision": config.get("revision"),
+        **total.report(),
+    }
     LOGGER.info("Query encoding complete: %s", result)
     return result

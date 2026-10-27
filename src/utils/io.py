@@ -31,6 +31,16 @@ def atomic_write_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as output:
+        output.write(value)
+        output.flush()
+        os.fsync(output.fileno())
+    temporary.replace(path)
+
+
 def directory_size(path: Path) -> int:
     if path.is_file():
         return path.stat().st_size
@@ -47,6 +57,92 @@ def count_lines(path: Path) -> int:
     if last_byte and last_byte != b"\n":
         lines += 1
     return lines
+
+
+def file_fingerprint(path: Path, *, include_lines: bool = False) -> dict[str, Any]:
+    """Return a content fingerprint, optionally counting lines in the same pass."""
+    digest = hashlib.sha256()
+    size = 0
+    lines = 0
+    last_byte = b""
+    with path.open("rb") as source:
+        while block := source.read(16 * 1024 * 1024):
+            digest.update(block)
+            size += len(block)
+            if include_lines:
+                lines += block.count(b"\n")
+                last_byte = block[-1:]
+    result: dict[str, Any] = {
+        "type": "file",
+        "bytes": size,
+        "sha256": digest.hexdigest(),
+    }
+    if include_lines:
+        if last_byte and last_byte != b"\n":
+            lines += 1
+        result["lines"] = lines
+    return result
+
+
+def path_inventory(path: Path) -> dict[str, Any]:
+    """Create a cheap resume fingerprint without reading file contents."""
+    if path.is_file():
+        stat = path.stat()
+        return {
+            "type": "file",
+            "bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    if not path.is_dir():
+        return {"type": "missing"}
+    files = []
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        stat = item.stat()
+        files.append(
+            {
+                "path": item.relative_to(path).as_posix(),
+                "bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    return {
+        "type": "directory",
+        "file_count": len(files),
+        "bytes": sum(int(item["bytes"]) for item in files),
+        "signature": stable_hash(files),
+    }
+
+
+def path_fingerprint(path: Path) -> dict[str, Any]:
+    """Return a deterministic content fingerprint for a file or directory."""
+    if path.is_file():
+        return file_fingerprint(path)
+    if not path.is_dir():
+        return {"type": "missing"}
+
+    files = []
+    combined = hashlib.sha256()
+    total_bytes = 0
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        relative = item.relative_to(path).as_posix()
+        fingerprint = file_fingerprint(item)
+        size = int(fingerprint["bytes"])
+        sha256 = str(fingerprint["sha256"])
+        files.append({"path": relative, "bytes": size, "sha256": sha256})
+        combined.update(relative.encode("utf-8"))
+        combined.update(b"\0")
+        combined.update(str(size).encode("ascii"))
+        combined.update(b"\0")
+        combined.update(sha256.encode("ascii"))
+        combined.update(b"\n")
+        total_bytes += size
+    return {
+        "type": "directory",
+        "file_count": len(files),
+        "bytes": total_bytes,
+        "sha256": combined.hexdigest(),
+        "files": files,
+    }
 
 
 def vector_files(path: Path) -> list[Path]:
