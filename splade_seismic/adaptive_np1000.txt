@@ -1,0 +1,36 @@
+
+Building the index...
+Configuration { pruning: GlobalThreshold { n_postings: 1000, max_fraction: 1.5 }, blocking: RandomKmeans { centroid_fraction: 0.1, min_cluster_size: 2, clustering_algorithm: RandomKmeansInvertedIndexApprox { doc_cut: 15 } }, summarization: EnergyPreserving { summary_energy: 0.4 }, knn: KnnConfiguration { nknn: 0, knn_path: None } }
+Distributing and pruning postings: 1 secs
+Number of posting lists: 30522
+Avg posting list length: 387.26
+Building summaries: 3 secs
+  конфигураций 50/644, прошло 97 с
+  конфигураций 100/644, прошло 324 с
+  конфигураций 150/644, прошло 400 с
+  конфигураций 200/644, прошло 452 с
+  конфигураций 250/644, прошло 515 с
+  конфигураций 300/644, прошло 570 с
+  конфигураций 350/644, прошло 629 с
+  конфигураций 400/644, прошло 690 с
+  конфигураций 450/644, прошло 747 с
+  конфигураций 500/644, прошло 811 с
+  конфигураций 550/644, прошло 865 с
+  конфигураций 600/644, прошло 935 с
+замеры сохранены в /data/konkovani/adapt_1000.npz
+queries=2000 n_postings=1000; задержка в микросекундах, один поток
+
+Сводка по seed [0, 1, 2] (параметры на tune, числа на test).
+ratio — к лучшей конфигурации обычного SEISMIC при той же полноте; [CI] — 95% bootstrap (seed-среднее границ);
+CI<1 — в скольких seed верхняя граница < 1; p95r — p95 задержки к p95 базовой конфигурации для той же цели.
+
+target | метод recall    мкс    p95  ratio             CI  CI<1  p95r  config (seed 0)
+  0.90 | base   0.906    144    250   1.00   [1.00, 1.00]  0/3   1.00  cut=3,hf=0.95
+  0.90 | adapt  0.902    140    249   0.99   [0.98, 1.01]  0/3   1.00  maxcut=8,hf=1.0,eps=0.01,min=3
+
+  0.95 | base   0.952    206    351   1.00   [1.00, 1.00]  0/3   1.00  cut=5,hf=0.95
+  0.95 | adapt  0.951    215    397   1.08   [1.02, 1.12]  0/3   1.14  maxcut=8,hf=0.8,eps=0.05,min=3
+
+  0.97 | base   0.970    265    459   1.00   [1.00, 1.06]  0/3   1.00  cut=5,hf=0.85
+  0.97 | adapt недостижимо
+

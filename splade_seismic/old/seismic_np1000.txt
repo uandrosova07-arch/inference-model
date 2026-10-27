@@ -1,0 +1,48 @@
+
+Building the index...
+Configuration { pruning: GlobalThreshold { n_postings: 1000, max_fraction: 1.5 }, blocking: RandomKmeans { centroid_fraction: 0.1, min_cluster_size: 2, clustering_algorithm: RandomKmeansInvertedIndexApprox { doc_cut: 15 } }, summarization: EnergyPreserving { summary_energy: 0.4 }, knn: KnnConfiguration { nknn: 0, knn_path: None } }
+Distributing and pruning postings: 1 secs
+Number of posting lists: 30522
+Avg posting list length: 387.26
+Building summaries: 2 secs
+индекс построен за 4 с
+Saving ... /data/konkovani/seismic_idx_1000.index.seismic
+  конфигураций 8/104, прошло 3 с
+  конфигураций 16/104, прошло 9 с
+  конфигураций 24/104, прошло 17 с
+  конфигураций 32/104, прошло 25 с
+  конфигураций 40/104, прошло 35 с
+  конфигураций 48/104, прошло 47 с
+  конфигураций 56/104, прошло 59 с
+  конфигураций 64/104, прошло 73 с
+  конфигураций 72/104, прошло 89 с
+  конфигураций 80/104, прошло 107 с
+  конфигураций 88/104, прошло 128 с
+  конфигураций 96/104, прошло 153 с
+  конфигураций 104/104, прошло 180 с
+замеры сохранены в /data/konkovani/seismic_1000.npz
+docs=200000 queries=2000 n_postings=1000; задержка в микросекундах, один поток
+точный перебор в том же движке: медиана 17178 мкс на запрос
+
+Сводка по seed [0, 1, 2]: параметры на tune, числа на test.
+ratio = средняя задержка / задержка лучшей общей конфигурации при той же полноте (фронт Парето на test);
+p95r — то же для 95-го перцентиля задержки. config — выбранные параметры в первом seed.
+
+target | метод   recall     мкс     p95  ratio   p95r  config(seed 0)
+  0.90 | fixed    0.906      75     116   1.00   1.00  cut=3,hf=0.95
+  0.90 | gamma    0.900      76     126   1.04   1.12  gamma=0.27,hf=0.95
+  0.90 | linear   0.901      75     122   1.02   1.07  hf=0.9,tau=0.8,d=+0.2
+  0.90 | oracle   0.932      64     125   0.72   0.92  recall_q>=0.85
+
+  0.95 | fixed    0.950     104     165   1.02   1.05  cut=5,hf=0.95
+  0.95 | gamma    0.950     104     174   1.04   1.10  gamma=0.42,hf=0.95
+  0.95 | linear   0.952     102     167   1.00   1.04  hf=0.85,tau=0.9,d=+0.4
+  0.95 | oracle   1.000      83     177    nan    nan  recall_q>=0.95
+
+  0.97 | fixed    0.971     130     209   1.00   1.00  cut=5,hf=0.85
+  0.97 | gamma    0.970     129     216   1.02   1.03  gamma=0.42,hf=0.85
+  0.97 | linear   0.969     125     205   1.00   1.01  hf=0.85,tau=0.9,d=+0.8
+  0.97 | oracle   1.000      83     177    nan    nan  recall_q>=0.95
+
+fixed может давать ratio > 1: выбор на tune не всегда попадает на фронт Парето test. Оракул нереализуем;
+nan — полнота метода выше, чем у любой общей конфигурации, сравнивать не с чем.

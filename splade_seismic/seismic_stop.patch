@@ -1,0 +1,204 @@
+diff -ru pyseismic_lsr-0.5.4_orig/src/inverted_index.rs pyseismic_lsr-0.5.4/src/inverted_index.rs
+--- pyseismic_lsr-0.5.4_orig/src/inverted_index.rs	2026-10-23 01:39:53.511352392 +0300
++++ pyseismic_lsr-0.5.4/src/inverted_index.rs	2026-10-23 01:39:53.533395553 +0300
+@@ -165,6 +165,31 @@
+         <EncoderFor<S> as VectorEncoder>::QueryVector<'q>:
+             From<SparseVectorView<'q, ComponentFor<S>, f32>>,
+     {
++        // Остановка выключена: поведение совпадает с исходным SEISMIC.
++        self.search_with_stop(query, k, query_cut, heap_factor, n_knn, first_sorted, f32::NEG_INFINITY, usize::MAX)
++    }
++
++    /// Как `search`, но обход слов запроса прекращается, когда после очередного слова k-й скор в куче
++    /// вырос относительно меньше чем на `stop_eps` (проверка начинается после `min_terms` слов).
++    #[allow(clippy::too_many_arguments)]
++    #[must_use]
++    pub fn search_with_stop<'q>(
++        &'q self,
++        query: SparseVectorView<'q, ComponentFor<S>, f32>,
++        k: usize,
++        query_cut: usize,
++        heap_factor: f32,
++        n_knn: usize,
++        first_sorted: bool,
++        stop_eps: f32,
++        min_terms: usize,
++    ) -> Vec<ScoredVectorDotProduct>
++    where
++        S: SeismicSearchDataset,
++        EncoderFor<S>: VectorEncoder<Distance = DotProduct>,
++        <EncoderFor<S> as VectorEncoder>::QueryVector<'q>:
++            From<SparseVectorView<'q, ComponentFor<S>, f32>>,
++    {
+         let query_components = query.components();
+         let query_values = query.values();
+ 
+@@ -188,6 +213,21 @@
+             .iter()
+             .zip(query_values)
+             .k_largest_by(query_cut, |a, b| a.1.total_cmp(b.1));
++        let mut terms_done: usize = 0;
++        let mut prev_kth = f32::NEG_INFINITY;
++        // true, если пора остановиться (k-й скор почти не вырос за последнее слово)
++        let mut check_stop = |heap: &KHeap<ScoredRange<DotProduct>>, terms_done: usize| -> bool {
++            if heap.len() < k {
++                return false;
++            }
++            let kth = heap.peek().distance.distance();
++            let stop = terms_done >= min_terms
++                && prev_kth.is_finite()
++                && (kth - prev_kth) / kth.abs().max(1e-12) <= stop_eps;
++            prev_kth = kth;
++            stop
++        };
++        let mut stopped = false;
+         if first_sorted && let Some((&component_id, _value)) = iter.next() {
+             let component_idx: usize = component_id.as_();
+             self.posting_lists[component_idx].sort_and_search(
+@@ -199,18 +239,26 @@
+                 &mut visited,
+                 &self.forward_index,
+             );
++            terms_done += 1;
++            stopped = check_stop(&heap, terms_done);
+         }
+-        for (&component_id, _value) in iter {
+-            let component_idx: usize = component_id.as_();
+-            self.posting_lists[component_idx].search(
+-                &mut evaluator,
+-                &query,
+-                k,
+-                heap_factor,
+-                &mut heap,
+-                &mut visited,
+-                &self.forward_index,
+-            );
++        if !stopped {
++            for (&component_id, _value) in iter {
++                let component_idx: usize = component_id.as_();
++                self.posting_lists[component_idx].search(
++                    &mut evaluator,
++                    &query,
++                    k,
++                    heap_factor,
++                    &mut heap,
++                    &mut visited,
++                    &self.forward_index,
++                );
++                terms_done += 1;
++                if check_stop(&heap, terms_done) {
++                    break;
++                }
++            }
+         }
+         if n_knn > 0
+             && let Some(knn) = self.knn.as_ref()
+diff -ru pyseismic_lsr-0.5.4_orig/src/inverted_index_wrapper.rs pyseismic_lsr-0.5.4/src/inverted_index_wrapper.rs
+--- pyseismic_lsr-0.5.4_orig/src/inverted_index_wrapper.rs	2026-10-23 01:39:53.511518450 +0300
++++ pyseismic_lsr-0.5.4/src/inverted_index_wrapper.rs	2026-10-23 01:39:53.533950362 +0300
+@@ -249,6 +249,46 @@
+             .search(query, k, query_cut, heap_factor, n_knn, first_sorted)
+     }
+ 
++    /// Поиск с остановкой по росту k-го скора (см. `InvertedIndex::search_with_stop`).
++    #[allow(clippy::too_many_arguments)]
++    pub fn search_with_stop(
++        &self,
++        query_id: &str,
++        query_components_original: &[String],
++        query_values: &[f32],
++        k: usize,
++        query_cut: usize,
++        heap_factor: f32,
++        n_knn: usize,
++        first_sorted: bool,
++        stop_eps: f32,
++        min_terms: usize,
++    ) -> Vec<SearchResult>
++    where
++        ComponentFor<S>: FromPrimitive,
++        for<'a> <EncoderFor<S> as VectorEncoder>::QueryVector<'a>:
++            From<SparseVectorView<'a, ComponentFor<S>, f32>>,
++        for<'a> <EncoderFor<S> as VectorEncoder>::Evaluator<'a>: QueryEvaluator<
++                <EncoderFor<S> as VectorEncoder>::EncodedVector<'a>,
++                Distance = DotProduct,
++            >,
++    {
++        let (filtered_query_components, filtered_query_values) =
++            resolve_query_tokens::<ComponentFor<S>>(
++                query_components_original,
++                query_values,
++                &self.token_to_id_map,
++            );
++        let query = SparseVectorView::new(
++            filtered_query_components.as_slice(),
++            filtered_query_values.as_slice(),
++        );
++        let results = self.inverted_index.search_with_stop(
++            query, k, query_cut, heap_factor, n_knn, first_sorted, stop_eps, min_terms,
++        );
++        self.remap_doc_ids(results, query_id)
++    }
++
+     #[allow(clippy::too_many_arguments)]
+     pub fn search(
+         &self,
+diff -ru pyseismic_lsr-0.5.4_orig/src/pylib/mod.rs pyseismic_lsr-0.5.4/src/pylib/mod.rs
+--- pyseismic_lsr-0.5.4_orig/src/pylib/mod.rs	2026-10-23 01:39:53.512521636 +0300
++++ pyseismic_lsr-0.5.4/src/pylib/mod.rs	2026-10-23 01:39:53.534382315 +0300
+@@ -608,6 +608,55 @@
+                 .collect())
+         }
+ 
++        /// Same as `search`, but stops scanning query terms once the k-th best score in the heap grew by
++        /// a relative amount <= `stop_eps` after the last processed term (checked after `min_terms` terms).
++        #[pyo3(signature = (
++            query_id,
++            query_components,
++            query_values,
++            k,
++            query_cut,
++            heap_factor,
++            stop_eps,
++            min_terms=1,
++            n_knn=0,
++            sorted=true
++        ))]
++        #[allow(clippy::too_many_arguments)]
++        pub fn search_adaptive<'py>(
++            &self,
++            query_id: String,
++            query_components: &Bound<'py, PyAny>,
++            query_values: PyReadonlyArrayDyn<'py, f32>,
++            k: usize,
++            query_cut: usize,
++            heap_factor: f32,
++            stop_eps: f32,
++            min_terms: usize,
++            n_knn: usize,
++            sorted: bool,
++        ) -> PyResult<Vec<(String, f32, String)>> {
++            let query_components = extract_tokens("query_components", query_components)?;
++            let query_values = query_values.to_vec()?;
++            Ok(self
++                .index
++                .search_with_stop(
++                    &query_id,
++                    &query_components,
++                    &query_values,
++                    k,
++                    query_cut,
++                    heap_factor,
++                    n_knn,
++                    sorted,
++                    stop_eps,
++                    min_terms,
++                )
++                .into_iter()
++                .map(|r| r.to_tuple())
++                .collect())
++        }
++
+         /// Look up the stored text content for a document by its string document ID.
+         ///
+         /// Args:
