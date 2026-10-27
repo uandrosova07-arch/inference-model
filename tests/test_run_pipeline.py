@@ -4,7 +4,21 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_pipeline import discover_msmarco_collection, has_documents_override, override_value
+from scripts.run_pipeline import (
+    discover_msmarco_collection,
+    has_documents_override,
+    override_value,
+)
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+
+
+def _requirements(path: Path) -> set[str]:
+    return {
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
 
 
 def _write_dataset(directory: Path, *, complete: bool = True) -> Path:
@@ -65,3 +79,10 @@ def test_detects_explicit_hydra_documents_override(override: str) -> None:
 def test_reads_last_hydra_override_value() -> None:
     assert override_value(["seed=1", "+seed=7"], "seed", "42") == "7"
     assert override_value([], "seed", "42") == "42"
+
+
+def test_kaggle_requirements_match_local_pins() -> None:
+    local = _requirements(PROJECT_DIR / "requirements.txt")
+    kaggle = _requirements(PROJECT_DIR / "requirements-kaggle.txt")
+
+    assert kaggle <= local
