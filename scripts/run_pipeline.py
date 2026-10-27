@@ -50,6 +50,13 @@ def has_documents_override(overrides: Sequence[str]) -> bool:
     )
 
 
+def should_discover_msmarco_collection(
+    overrides: Sequence[str], input_dir: Path = KAGGLE_INPUT_DIR
+) -> bool:
+    """Return whether a Kaggle run needs automatic collection discovery."""
+    return input_dir.is_dir() and not has_documents_override(overrides)
+
+
 def override_value(overrides: Sequence[str], name: str, default: str) -> str:
     for override in reversed(overrides):
         key, separator, value = override.lstrip("+").partition("=")
@@ -106,7 +113,7 @@ def discover_msmarco_collection(
 def main() -> None:
     args, overrides = parse_args()
     environment = os.environ.copy()
-    if Path(args.config_name).stem == "kaggle" and not has_documents_override(overrides):
+    if should_discover_msmarco_collection(overrides):
         collection = discover_msmarco_collection(environment=environment)
         environment["MSMARCO_COLLECTION"] = str(collection)
         print(f"MS MARCO collection: {collection}", flush=True)
