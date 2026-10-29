@@ -23,4 +23,7 @@ search:
   warmup_queries: 16
   threads: ${index.threads}
   run_name: seismic
+  router:
+    enabled: false
+    model_path: null
 

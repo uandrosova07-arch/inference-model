@@ -256,6 +256,49 @@ python scripts/run_pipeline.py \
 Подходит для `query_cut`, `heap_factor`, `first_sorted`, `top_k` и числа search
 threads.
 
+### Query-adaptive router: один Kaggle-запуск
+
+Первый learned-router намеренно меняет только `query_cut`: кандидаты `6`, `8`
+и baseline `10` используют один и тот же индекс, query vectors,
+`heap_factor=0.8`, `top_k=1000`, четыре search thread и выключенный graph.
+Дерево глубины 3 получает только дешёвые признаки готового SPLADE-вектора
+(число ненулевых компонент, нормы, концентрацию top weights и entropy).
+
+Для каждого запроса oracle выбирает минимальный `query_cut`, который не хуже
+`query_cut=10` одновременно по `Recall@1000` и `MRR@10`; фактическое время
+каждой фиксированной политики также сохраняется в training report. Модель обучается на
+стабильном hash-split `60% train / 20% validation / 20% test`; test не
+используется при построении дерева. `leaf_safety_quantile=0.95` делает листья
+консервативными для редких сложных запросов.
+
+```bash
+python scripts/run_query_router_experiment.py \
+  --baseline-root /kaggle/input/datasets/iskulovdamir/msmarco-splade-seismic \
+  --experiment-prefix query_router_v1
+```
+
+Скрипт последовательно:
+
+1. выполняет search-only кандидаты `query_cut=6` и `8`;
+2. переиспользует опубликованный run как политику `query_cut=10`;
+3. обучает маленькое ordinal CART-дерево без `sklearn`;
+4. сохраняет unbiased test-оценку simulated router;
+5. запускает adaptive search, группируя запросы по выбранной политике;
+6. выполняет обычную стадию metrics и сохраняет manifest дочернего запуска.
+
+Артефакты модели находятся в
+`outputs/query_router_v1_model/`: `training_plan.json`, `router.json`,
+`training_report.json`, `training_assignments.jsonl`, `test.qrels.tsv` и
+`experiment_summary.json`. Итоговый adaptive run находится в
+`outputs/query_router_v1_adaptive/`; его
+`metrics/router_assignments.jsonl` содержит решение и признаки для каждого
+запроса.
+
+Для чернового iteration можно добавить `--skip-fingerprints`, но финальный
+сравниваемый запуск следует делать без этого флага, чтобы manifests содержали
+SHA256 всех артефактов. Изменить сетку можно через `--query-cuts 5,7,10`, а
+размер дерева — через `--max-depth` и `--min-samples-leaf`.
+
 ### 2. Index sweep без повторного SPLADE encoding
 
 ```bash

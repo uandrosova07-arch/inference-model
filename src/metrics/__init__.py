@@ -1,3 +1,3 @@
-from src.metrics.retrieval import evaluate, load_run
+from src.metrics.retrieval import evaluate, load_run, query_metrics
 
-__all__ = ["evaluate", "load_run"]
+__all__ = ["evaluate", "load_run", "query_metrics"]

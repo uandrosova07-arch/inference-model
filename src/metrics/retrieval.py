@@ -39,7 +39,7 @@ def _dcg(relevances: list[int]) -> float:
     )
 
 
-def _query_metrics(
+def query_metrics(
     judged: dict[str, int],
     ranking: list[str],
     cutoffs: list[int],
@@ -97,7 +97,7 @@ def evaluate(
     totals: dict[str, float] = defaultdict(float)
     query_rows = []
     for query_id, judged in qrels.items():
-        values = _query_metrics(judged, ranking.get(query_id, []), cutoffs, map_cutoff)
+        values = query_metrics(judged, ranking.get(query_id, []), cutoffs, map_cutoff)
         for name, value in values.items():
             totals[name] += value
         query_rows.append({"query_id": query_id, **values})

@@ -4,11 +4,13 @@ import json
 import logging
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from src.index.query_router import load_router_model, route_vector
 from src.utils.io import directory_size, jsonl_lines, seismic_document_input
 
 INDEX_SUFFIX = ".index.seismic"
@@ -165,6 +167,7 @@ def search_index(
     run_path: Path,
     index_variant: str,
     config: dict[str, Any],
+    router_assignments_path: Path | None = None,
 ) -> dict[str, Any]:
     from seismic import get_seismic_string
 
@@ -179,35 +182,93 @@ def search_index(
     prepared = _prepare_queries(records, get_seismic_string())
     prepare_seconds = time.perf_counter() - prepare_started
 
+    router_config = config.get("router", {})
+    router_enabled = bool(router_config.get("enabled", False))
+    assignments: list[dict[str, Any]] = []
+    routed_groups: list[tuple[str, list[Any], dict[str, Any]]] = []
+    routing_seconds = 0.0
+    if router_enabled:
+        model_path = Path(str(router_config.get("model_path") or ""))
+        if not model_path.is_file():
+            raise FileNotFoundError(f"Query router model not found: {model_path}")
+        model = load_router_model(model_path)
+        routing_started = time.perf_counter()
+        grouped: dict[str, list[Any]] = {str(policy["name"]): [] for policy in model["policies"]}
+        policy_parameters = {
+            str(policy["name"]): dict(policy.get("parameters", {}))
+            for policy in model["policies"]
+        }
+        for record, prepared_query in zip(records, prepared):
+            routed = route_vector(model, record["vector"])
+            grouped[routed["policy"]].append(prepared_query)
+            assignments.append(
+                {
+                    "query_id": str(record["id"]),
+                    "policy": routed["policy"],
+                    "policy_index": routed["policy_index"],
+                    "parameters": routed["parameters"],
+                    "features": routed["features"],
+                }
+            )
+        routing_seconds = time.perf_counter() - routing_started
+        for policy in model["policies"]:
+            name = str(policy["name"])
+            if grouped[name]:
+                routed_groups.append((name, grouped[name], {**config, **policy_parameters[name]}))
+    else:
+        routed_groups.append(("fixed", prepared, config))
+
     warmup_count = min(int(config.get("warmup_queries", 0)), len(prepared))
     if warmup_count:
-        _batch_search(index, prepared[:warmup_count], config)
+        for _, policy_queries, policy_config in routed_groups:
+            _batch_search(index, policy_queries[: min(warmup_count, len(policy_queries))], policy_config)
 
     run_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = run_path.with_suffix(run_path.suffix + ".tmp")
     batch_size = int(config["batch_size"])
     batch_ms_per_query: list[float] = []
+    policy_search_seconds: dict[str, float] = {}
     result_count = 0
+    completed = 0
     started = time.perf_counter()
     with temporary.open("w", encoding="utf-8") as output:
-        for batch_number, batch in enumerate(_chunks(prepared, batch_size), 1):
-            batch_started = time.perf_counter()
-            results = _batch_search(index, batch, config)
-            batch_seconds = time.perf_counter() - batch_started
-            batch_ms_per_query.extend([batch_seconds * 1000 / len(batch)] * len(batch))
-            for query_results in results:
-                for rank, (query_id, score, document_id) in enumerate(query_results, 1):
-                    output.write(
-                        f"{query_id}\tQ0\t{document_id}\t{rank}\t{float(score):.8f}\t"
-                        f"{config['run_name']}\n"
-                    )
-                    result_count += 1
-            completed = min(batch_number * batch_size, len(prepared))
-            LOGGER.info("SEISMIC searched %s/%s queries", completed, len(prepared))
+        for policy_name, policy_queries, policy_config in routed_groups:
+            policy_started = time.perf_counter()
+            for batch in _chunks(policy_queries, batch_size):
+                batch_started = time.perf_counter()
+                results = _batch_search(index, batch, policy_config)
+                batch_seconds = time.perf_counter() - batch_started
+                batch_ms_per_query.extend([batch_seconds * 1000 / len(batch)] * len(batch))
+                for query_results in results:
+                    for rank, (query_id, score, document_id) in enumerate(query_results, 1):
+                        output.write(
+                            f"{query_id}\tQ0\t{document_id}\t{rank}\t{float(score):.8f}\t"
+                            f"{config['run_name']}\n"
+                        )
+                        result_count += 1
+                completed += len(batch)
+                LOGGER.info("SEISMIC searched %s/%s queries", completed, len(prepared))
+            policy_search_seconds[policy_name] = time.perf_counter() - policy_started
         output.flush()
         os.fsync(output.fileno())
     temporary.replace(run_path)
-    seconds = time.perf_counter() - started
+    execution_seconds = time.perf_counter() - started
+    seconds = routing_seconds + execution_seconds
+
+    if router_enabled and router_assignments_path is not None:
+        router_assignments_path.parent.mkdir(parents=True, exist_ok=True)
+        assignments_temporary = router_assignments_path.with_suffix(
+            router_assignments_path.suffix + ".tmp"
+        )
+        with assignments_temporary.open("w", encoding="utf-8") as output:
+            for assignment in assignments:
+                output.write(
+                    json.dumps(assignment, ensure_ascii=False, separators=(",", ":")) + "\n"
+                )
+            output.flush()
+            os.fsync(output.fileno())
+        assignments_temporary.replace(router_assignments_path)
+
     metrics = {
         "queries": len(prepared),
         "results": result_count,
@@ -221,6 +282,18 @@ def search_index(
         "batch_amortized_query_ms_p99": _percentile(batch_ms_per_query, 0.99),
         "run_bytes": run_path.stat().st_size,
     }
+    if router_enabled:
+        metrics["router"] = {
+            "enabled": True,
+            "model_path": str(router_config["model_path"]),
+            "routing_seconds": routing_seconds,
+            "execution_seconds": execution_seconds,
+            "policy_counts": dict(Counter(row["policy"] for row in assignments)),
+            "policy_search_seconds": policy_search_seconds,
+            "assignments_path": (
+                str(router_assignments_path) if router_assignments_path is not None else None
+            ),
+        }
     LOGGER.info(
         "SEISMIC search complete: queries=%s, qps=%.2f, seconds=%.2f",
         metrics["queries"],

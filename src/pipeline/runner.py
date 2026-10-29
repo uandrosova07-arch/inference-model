@@ -212,6 +212,7 @@ class PipelineRunner:
             "index_file",
             "run",
             "per_query_metrics",
+            "router_assignments",
             "resolved_config",
             "report",
             "pipeline_log",
@@ -240,6 +241,15 @@ class PipelineRunner:
                     else path_inventory(local_model)
                 ),
             }
+        router = self.config["index"]["search"].get("router", {})
+        if bool(router.get("enabled", False)):
+            router_model = resolve_path(str(router.get("model_path") or ""), self.project_root)
+            if not router_model.is_file():
+                raise FileNotFoundError(f"Query router model not found: {router_model}")
+            artifacts["router_model"] = {
+                "path": str(router_model),
+                **file_fingerprint(router_model),
+            }
 
         dataset_state_path = self.paths["state_dir"] / "dataset.json"
         dataset_state = (
@@ -266,6 +276,7 @@ class PipelineRunner:
             "model": self.config["model"].get("name_or_path"),
             "model_revision": self.config["model"].get("revision"),
             "model_sha256": artifacts.get("model", {}).get("sha256"),
+            "router_model_sha256": artifacts.get("router_model", {}).get("sha256"),
         }
         artifact_identities = {
             name: {
@@ -349,6 +360,16 @@ class PipelineRunner:
                 fingerprint["inputs"][name] = {
                     "path": str(path),
                     "inventory": path_inventory(path),
+                }
+        if stage_name == "search":
+            router = self.config["index"]["search"].get("router", {})
+            if bool(router.get("enabled", False)):
+                router_model = resolve_path(str(router.get("model_path") or ""), self.project_root)
+                if not router_model.is_file():
+                    raise FileNotFoundError(f"Query router model not found: {router_model}")
+                fingerprint["inputs"]["router_model"] = {
+                    "path": str(router_model),
+                    "fingerprint": file_fingerprint(router_model),
                 }
         dataset_input = {
             "prepare": "documents",
@@ -536,8 +557,13 @@ class PipelineRunner:
             run_path=self.paths["run"],
             index_variant=str(self.config["index"]["variant"]),
             config=self.config["index"]["search"],
+            router_assignments_path=self.paths["router_assignments"],
         )
-        return StageResult([self.paths["run"]], result)
+        outputs = [self.paths["run"]]
+        router = self.config["index"]["search"].get("router", {})
+        if bool(router.get("enabled", False)) and self.paths["router_assignments"].exists():
+            outputs.append(self.paths["router_assignments"])
+        return StageResult(outputs, result)
 
     def _metrics(self) -> StageResult:
         if not self.paths["run"].exists():
@@ -592,6 +618,7 @@ class PipelineRunner:
                     "query_vectors",
                     "index_file",
                     "run",
+                    "router_assignments",
                     "log_dir",
                     "pipeline_log",
                 }

@@ -40,6 +40,7 @@ paths:
   run: ${runtime.output_dir}/seismic/run.dev.trec
   report: ${runtime.output_dir}/report.json
   per_query_metrics: ${runtime.output_dir}/metrics/per_query.jsonl
+  router_assignments: ${runtime.output_dir}/metrics/router_assignments.jsonl
   log_dir: ${runtime.output_dir}/logs
   pipeline_log: ${paths.log_dir}/pipeline.log
   state_dir: ${runtime.output_dir}/state
