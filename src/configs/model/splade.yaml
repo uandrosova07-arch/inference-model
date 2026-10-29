@@ -1,0 +1,25 @@
+name_or_path: naver/splade-cocondenser-selfdistil
+backend: sentence_transformers  # sentence_transformers or local_splade
+# Immutable Hub revision used by the baseline. Local model directories ignore it.
+revision: 31f3eb4b5aae648cde974db3b7b44bf2d095106b
+local_path: input/models/splade-cocondenser-selfdistil
+local_files_only: false
+# The pinned revision contains pytorch_model.bin. Avoid mutable Hub conversion PRs.
+use_safetensors: false
+device: auto
+devices: auto
+batch_size: 32
+bucket_multiplier: 32
+shard_size: 10000
+max_length: 256
+precision: auto
+# Raw floating-point SPLADE weights are kept for SEISMIC.
+threshold: 0.0
+max_terms: null
+include_content: false
+weight_decimals: 6
+compress_vectors: false
+gzip_level: 1
+overwrite: false
+trust_remote_code: false
+

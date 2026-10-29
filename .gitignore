@@ -1,0 +1,14 @@
+.DS_Store
+
+.venv/
+
+input/
+outputs/
+
+.env
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.hydra/
+multirun/

@@ -1,0 +1,58 @@
+defaults:
+  - dataset: msmarco
+  - model: splade
+  - index: seismic
+  - metrics: retrieval
+  - _self_
+
+experiment:
+  name: baseline
+  kind: experiment
+  parent_manifest: null
+  change_note: null
+
+seed: 42
+
+runtime:
+  # Relative paths are resolved from the repository root.
+  output_dir: outputs/${experiment.name}
+  temporary_dir: null
+  log_level: INFO
+  require_cuda: false
+  deterministic: true
+  fingerprint_artifacts: true
+  require_clean_git: false
+
+pipeline:
+  stages: [prepare, encode_documents, encode_queries, build_index, search, metrics]
+  start_at: prepare
+  end_at: metrics
+  resume: true
+  force: []
+
+# These are deliberately public config values. Point any of them at
+# /kaggle/input/... and start from the corresponding later stage.
+paths:
+  document_vectors: ${runtime.output_dir}/vectors/documents
+  query_vectors: ${runtime.output_dir}/vectors/queries.dev.jsonl
+  index_prefix: ${runtime.output_dir}/seismic/msmarco
+  index_file: ${paths.index_prefix}.index.seismic
+  run: ${runtime.output_dir}/seismic/run.dev.trec
+  report: ${runtime.output_dir}/report.json
+  per_query_metrics: ${runtime.output_dir}/metrics/per_query.jsonl
+  router_assignments: ${runtime.output_dir}/metrics/router_assignments.jsonl
+  log_dir: ${runtime.output_dir}/logs
+  pipeline_log: ${paths.log_dir}/pipeline.log
+  state_dir: ${runtime.output_dir}/state
+  resolved_config: ${runtime.output_dir}/config.yaml
+  environment: ${runtime.output_dir}/environment.json
+  package_snapshot: ${runtime.output_dir}/packages.freeze.txt
+  manifest: ${runtime.output_dir}/manifest.json
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${runtime.output_dir}/hydra
+  output_subdir: null
+

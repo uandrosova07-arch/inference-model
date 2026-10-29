@@ -1,0 +1,17 @@
+name: msmarco-passage
+documents: input/datasets/msmarco/collection.tsv
+queries: input/datasets/msmarco/queries.dev.tsv
+qrels: input/datasets/msmarco/qrels.dev.tsv
+
+# pyserini gives the standard 6,980-query MS MARCO dev subset. Set both to
+# "file" to use the local TSVs instead.
+query_source: pyserini
+qrels_source: pyserini
+pyserini_topics: msmarco-passage-dev-subset
+pyserini_qrels: msmarco-passage-dev-subset
+
+expected_documents: 8841823
+max_documents: null
+max_queries: null
+validate_document_count: true
+

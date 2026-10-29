@@ -1,0 +1,25 @@
+defaults:
+  - config
+  - _self_
+
+experiment:
+  name: smoke
+
+dataset:
+  expected_documents: null
+  max_documents: 1000
+  max_queries: 100
+  query_source: file
+  qrels_source: file
+  validate_document_count: false
+
+model:
+  batch_size: 8
+  devices: 1
+
+index:
+  n_postings: 200
+
+search:
+  top_k: 100
+

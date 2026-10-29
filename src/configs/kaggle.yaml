@@ -1,0 +1,19 @@
+defaults:
+  - config
+  - _self_
+
+runtime:
+  output_dir: /kaggle/working/inference-model/outputs/${experiment.name}
+  temporary_dir: /kaggle/temp
+  require_cuda: true
+
+dataset:
+  # Kaggle can mount a dataset either directly below /kaggle/input or below
+  # an owner/dataset hierarchy. scripts/run_pipeline.py discovers the actual
+  # collection and exports this variable before Hydra resolves the config.
+  documents: ${oc.env:MSMARCO_COLLECTION,/kaggle/input/msmarco/collection.tsv}
+
+model:
+  compress_vectors: true
+  gzip_level: 1
+
