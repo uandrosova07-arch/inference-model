@@ -77,11 +77,17 @@ def test_detects_explicit_hydra_documents_override(override: str) -> None:
     assert has_documents_override([override])
 
 
-def test_discovers_collection_for_any_config_in_kaggle_runtime(tmp_path: Path) -> None:
+def test_discovers_collection_for_document_stages_in_kaggle_runtime(tmp_path: Path) -> None:
     assert should_discover_msmarco_collection([], tmp_path)
+    assert should_discover_msmarco_collection(["pipeline.start_at=encode_documents"], tmp_path)
     assert not should_discover_msmarco_collection(
         ["dataset.documents=/data/collection.tsv"], tmp_path
     )
+
+
+@pytest.mark.parametrize("start_at", ["encode_queries", "build_index", "search", "metrics"])
+def test_late_stage_run_does_not_require_collection(tmp_path: Path, start_at: str) -> None:
+    assert not should_discover_msmarco_collection([f"pipeline.start_at={start_at}"], tmp_path)
 
 
 def test_reads_last_hydra_override_value() -> None:

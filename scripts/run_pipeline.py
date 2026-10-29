@@ -16,6 +16,7 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 KAGGLE_INPUT_DIR = Path("/kaggle/input")
 MSMARCO_COMPANION_FILES = ("queries.dev.tsv", "qrels.dev.tsv")
+DOCUMENT_STAGES = ("prepare", "encode_documents")
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -54,7 +55,10 @@ def should_discover_msmarco_collection(
     overrides: Sequence[str], input_dir: Path = KAGGLE_INPUT_DIR
 ) -> bool:
     """Return whether a Kaggle run needs automatic collection discovery."""
-    return input_dir.is_dir() and not has_documents_override(overrides)
+    start_at = override_value(overrides, "pipeline.start_at", "prepare")
+    return (
+        input_dir.is_dir() and start_at in DOCUMENT_STAGES and not has_documents_override(overrides)
+    )
 
 
 def override_value(overrides: Sequence[str], name: str, default: str) -> str:

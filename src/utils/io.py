@@ -145,16 +145,37 @@ def path_fingerprint(path: Path) -> dict[str, Any]:
     }
 
 
+def _is_kaggle_expanded_gzip_member(path: Path) -> bool:
+    """Recognize a gzip shard transparently expanded by Kaggle Datasets.
+
+    Kaggle expands ``part.jsonl.gz`` into
+    ``part.jsonl/part.jsonl.gz.tmp``. The inner member is plain JSONL despite
+    retaining the temporary filename stored in the gzip header.
+    """
+    return (
+        path.is_file()
+        and path.name.endswith(".jsonl.gz.tmp")
+        and path.parent.name.endswith(".jsonl")
+        and path.name == f"{path.parent.name}.gz.tmp"
+    )
+
+
+def _is_vector_file(path: Path) -> bool:
+    return path.is_file() and (
+        path.name.endswith(".jsonl")
+        or path.name.endswith(".jsonl.gz")
+        or _is_kaggle_expanded_gzip_member(path)
+    )
+
+
 def vector_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
-    files = sorted(
-        item
-        for item in path.iterdir()
-        if item.is_file()
-        and (item.name.endswith(".jsonl") or item.name.endswith(".jsonl.gz"))
-        and not item.name.endswith(".tmp")
-    )
+    files = sorted(item for item in path.iterdir() if _is_vector_file(item))
+    if not files:
+        files = sorted(
+            item for item in path.rglob("*.jsonl.gz.tmp") if _is_kaggle_expanded_gzip_member(item)
+        )
     if not files:
         raise FileNotFoundError(f"No JSONL vector shards in {path}")
     return files
@@ -187,7 +208,7 @@ def jsonl_lines(path: Path) -> Iterator[str]:
                 raise ValueError(f"Cannot read {member.name} from {path}")
             for line in source:
                 yield line.decode("utf-8")
-    elif path.suffix == ".jsonl":
+    elif path.suffix == ".jsonl" or _is_kaggle_expanded_gzip_member(path):
         with path.open(encoding="utf-8") as source:
             yield from source
     else:

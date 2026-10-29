@@ -135,6 +135,100 @@ cutoffs, времена этапов, docs/s, QPS, latency percentiles и раз
 - `configuration_id` для конфигурации и `run_id` для конкретных артефактов;
 - ссылку и hash родительского manifest для дочерних экспериментов.
 
+## Проверка опубликованного baseline Dataset
+
+Для Dataset
+[`iskulovdamir/msmarco-splade-seismic`](https://www.kaggle.com/datasets/iskulovdamir/msmarco-splade-seismic/data)
+не нужно повторять encoding или indexing. Подключите только этот Dataset к
+Kaggle Notebook; GPU для проверки не требуется. Первая ячейка находит mount
+point независимо от того, плоский он или вложенный:
+
+```python
+!git clone --depth 1 --branch damir_branch https://github.com/uandrosova07-arch/inference-model.git
+%cd /kaggle/working/inference-model
+
+from pathlib import Path
+
+candidates = [
+    manifest.parent
+    for manifest in Path("/kaggle/input").rglob("manifest.json")
+    if (manifest.parent / "seismic/msmarco.index.seismic").is_file()
+]
+assert len(candidates) == 1, candidates
+BASELINE = candidates[0]
+print(BASELINE)
+
+!python scripts/verify_kaggle_dataset.py {BASELINE}
+```
+
+Структурная проверка должна сообщить `886` document-vector shards и завершиться
+строкой `OK`. Kaggle распаковывает каждый загруженный `.jsonl.gz` в каталог с
+вложенным `.jsonl.gz.tmp`; launcher поддерживает и исходную плоскую структуру,
+и эту структуру mount point.
+
+Проверка входа с этапа `search` запускает только `search -> metrics` поверх
+готового 8.6 GB индекса:
+
+```python
+!python scripts/run_pipeline.py \
+  --config-name=kaggle \
+  experiment.name=verify_published_search \
+  experiment.kind=verification \
+  experiment.parent_manifest={BASELINE}/manifest.json \
+  experiment.change_note=verify_published_index_search_and_metrics \
+  pipeline.start_at=search \
+  paths.index_file={BASELINE}/seismic/msmarco.index.seismic \
+  paths.query_vectors={BASELINE}/vectors/queries.dev.jsonl \
+  index.threads=4 \
+  runtime.require_cuda=false \
+  runtime.fingerprint_artifacts=false
+```
+
+Отдельно проверьте вход непосредственно с `metrics`, используя опубликованный
+TREC run. Повторная установка пакетов уже не нужна:
+
+```python
+!python scripts/run_pipeline.py \
+  --skip-install \
+  --config-name=kaggle \
+  experiment.name=verify_published_metrics \
+  experiment.kind=verification \
+  experiment.parent_manifest={BASELINE}/manifest.json \
+  experiment.change_note=verify_published_run_metrics \
+  pipeline.start_at=metrics \
+  paths.run={BASELINE}/seismic/run.dev.trec \
+  runtime.require_cuda=false \
+  runtime.fingerprint_artifacts=false
+```
+
+Финальная ячейка требует совпадения основных метрик нового search run с
+зафиксированным manifest с допуском `1e-6` для различий порядка float/ties между
+runtime:
+
+```python
+import json
+import math
+from pathlib import Path
+
+expected = json.loads((BASELINE / "manifest.json").read_text())["effectiveness"]
+actual = json.loads(
+    Path("outputs/verify_published_search/report.json").read_text()
+)["effectiveness"]
+
+for name in ("mrr_at_10", "ndcg_at_10", "map_at_1000", "recall_at_1000"):
+    assert math.isclose(actual[name], expected[name], rel_tol=0, abs_tol=1e-6), (
+        name,
+        actual[name],
+        expected[name],
+    )
+assert actual["queries"] == actual["queries_ranked"] == 6980
+print("OK: published index reproduces baseline search and metrics")
+```
+
+`runtime.fingerprint_artifacts=false` используется только для быстрой проверки,
+чтобы не перечитывать 8.6 GB индекс ради SHA256. Для реального дочернего
+эксперимента этот override следует убрать.
+
 ## Эксперименты поверх baseline
 
 Правило: один эксперимент — одно осмысленное изменение, новое
